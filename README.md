@@ -15,6 +15,7 @@
 
 目标 Windows 电脑不需要 Python、pip 或其他 Python 依赖，只需要浏览器。
 默认 DXF 输出到 EXE 同级的 `输出` 文件夹，不会写入 PyInstaller 的 `_internal` 文件夹。
+关闭浏览器页面后，EXE 会自动退出；再次双击不会创建新的后台服务器，只会打开已有页面。
 
 ## 本地构建
 

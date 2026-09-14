@@ -11,8 +11,11 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import os
 import sys
+import tempfile
 import threading
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -102,7 +105,7 @@ PAGE_TEMPLATE = r"""<!doctype html>
   <main class="app">
     <header>
       <h1>环形拼接件 DXF 生成器</h1>
-      <p>本地浏览器界面 · 尺寸单位：毫米 · 输出文件直接保存到本机</p>
+      <p>本地浏览器界面 · 尺寸单位：毫米 · 输出文件直接保存到本机 · 关闭页面后程序会自动退出</p>
     </header>
     <div class="content">
       <section class="panel">
@@ -178,6 +181,25 @@ PAGE_TEMPLATE = r"""<!doctype html>
     </div>
   </main>
   <script>
+    let pageClosing = false;
+    function heartbeat() {
+      fetch("/heartbeat", { method: "POST", cache: "no-store", keepalive: true }).catch(() => {});
+    }
+    function closeServer() {
+      if (pageClosing) return;
+      pageClosing = true;
+      clearInterval(heartbeatTimer);
+      const body = new Blob(["close"], { type: "text/plain" });
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon("/close", body);
+      } else {
+        fetch("/close", { method: "POST", body, keepalive: true }).catch(() => {});
+      }
+    }
+    heartbeat();
+    const heartbeatTimer = setInterval(heartbeat, 5000);
+    window.addEventListener("pagehide", closeServer, { once: true });
+
     const AUTO_NOTCH_RATIO = 0.25;
     const MIN_WEB_RATIO = 0.45;
     const $ = id => document.getElementById(id);
@@ -377,7 +399,121 @@ def json_bytes(payload: dict[str, object]) -> bytes:
     return json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
 
-def make_handler(default_output_dir: Path):
+class SingleInstance:
+    """Prevent repeated launches from creating multiple local servers."""
+
+    def __init__(self) -> None:
+        state_dir = Path(tempfile.gettempdir())
+        self.lock_path = state_dir / "ring_generator_gui.lock"
+        self.url_path = state_dir / "ring_generator_gui.url"
+        self.handle = None
+
+    def acquire(self) -> bool:
+        try:
+            self.handle = self.lock_path.open("a+")
+            if os.name == "nt":
+                import msvcrt
+
+                self.handle.seek(0)
+                self.handle.write("0")
+                self.handle.flush()
+                self.handle.seek(0)
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except (ImportError, OSError):
+            if self.handle is not None:
+                self.handle.close()
+                self.handle = None
+            return False
+
+    def write_url(self, url: str) -> None:
+        self.url_path.write_text(url, encoding="ascii")
+
+    def existing_url(self) -> str:
+        try:
+            url = self.url_path.read_text(encoding="ascii").strip()
+        except (OSError, UnicodeError):
+            return ""
+        return url if url.startswith("http://127.0.0.1:") else ""
+
+    def release(self) -> None:
+        if self.handle is None:
+            return
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                self.handle.seek(0)
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+        except (ImportError, OSError):
+            pass
+        finally:
+            self.handle.close()
+            self.handle = None
+            try:
+                self.url_path.unlink()
+            except FileNotFoundError:
+                pass
+
+
+class ServerLifecycle:
+    """Stop the local server when the browser page disappears."""
+
+    # Allow enough time for a packaged EXE and the browser to start. The
+    # page normally sends an explicit /close request immediately on exit.
+    heartbeat_timeout = 30.0
+
+    def __init__(self) -> None:
+        self.server = None
+        self.last_heartbeat = time.monotonic()
+        self.closed = False
+        self.lock = threading.Lock()
+
+    def attach(self, server: ThreadingHTTPServer) -> None:
+        self.server = server
+
+    def touch(self) -> None:
+        with self.lock:
+            self.last_heartbeat = time.monotonic()
+
+    def request_shutdown(self) -> None:
+        with self.lock:
+            if self.closed:
+                return
+            self.closed = True
+        if self.server is not None:
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
+
+    def mark_closed(self) -> None:
+        with self.lock:
+            self.closed = True
+
+    def watchdog(self) -> None:
+        while True:
+            time.sleep(5)
+            with self.lock:
+                if self.closed:
+                    return
+                expired = time.monotonic() - self.last_heartbeat > self.heartbeat_timeout
+            if expired:
+                self.request_shutdown()
+                return
+
+
+class LocalHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+
+def make_handler(default_output_dir: Path, lifecycle: ServerLifecycle):
     page = make_page(default_output_dir)
 
     class Handler(BaseHTTPRequestHandler):
@@ -396,14 +532,27 @@ def make_handler(default_output_dir: Path):
         def do_GET(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
             if path == "/":
+                lifecycle.touch()
                 self.send_bytes(page, "text/html; charset=utf-8")
             elif path == "/favicon.ico":
                 self.send_bytes(b"", "image/x-icon", status=204)
+            elif path == "/heartbeat":
+                lifecycle.touch()
+                self.send_bytes(b"", "text/plain; charset=utf-8", status=204)
             else:
                 self.send_bytes(b"Not found", "text/plain; charset=utf-8", status=404)
 
         def do_POST(self) -> None:  # noqa: N802
-            if urlparse(self.path).path != "/generate":
+            path = urlparse(self.path).path
+            if path == "/heartbeat":
+                lifecycle.touch()
+                self.send_bytes(b"", "text/plain; charset=utf-8", status=204)
+                return
+            if path == "/close":
+                self.send_bytes(b"", "text/plain; charset=utf-8", status=204)
+                lifecycle.request_shutdown()
+                return
+            if path != "/generate":
                 self.send_bytes(b"Not found", "text/plain; charset=utf-8", status=404)
                 return
 
@@ -559,21 +708,32 @@ def default_output_directory() -> Path:
 
 def main() -> None:
     args = build_parser().parse_args()
+    instance = SingleInstance()
+    if not instance.acquire():
+        existing_url = instance.existing_url()
+        if existing_url and not args.no_browser:
+            webbrowser.open(existing_url)
+        return
+
     default_output_dir = default_output_directory()
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(default_output_dir))
+    lifecycle = ServerLifecycle()
+    server = LocalHTTPServer((args.host, args.port), make_handler(default_output_dir, lifecycle))
+    lifecycle.attach(server)
     url = f"http://{args.host}:{server.server_port}/"
-    print(f"环形拼接件 DXF 生成器已启动：{url}")
-    print("请保持此终端窗口运行；按 Ctrl+C 停止程序。")
-
-    if not args.no_browser:
-        threading.Timer(0.25, lambda: webbrowser.open(url)).start()
-
+    instance.write_url(url)
+    threading.Thread(target=lifecycle.watchdog, daemon=True).start()
     try:
+        print(f"环形拼接件 DXF 生成器已启动：{url}")
+        print("关闭浏览器页面后程序会自动退出；再次启动会打开现有页面。")
+        if not args.no_browser:
+            threading.Timer(0.25, lambda: webbrowser.open(url)).start()
         server.serve_forever()
     except KeyboardInterrupt:
         print("\n程序已停止。")
     finally:
+        lifecycle.mark_closed()
         server.server_close()
+        instance.release()
 
 
 if __name__ == "__main__":
