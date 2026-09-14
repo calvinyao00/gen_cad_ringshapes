@@ -343,16 +343,12 @@ class DxfWriter:
         self.lines.extend((str(code), str(value)))
 
     def header(self) -> None:
-        self.pair(0, "SECTION")
-        self.pair(2, "HEADER")
-        self.pair(9, "$ACADVER")
-        # R12/AC1009 is intentionally used here because AutoCAD 2016 can
-        # open it without the owner dictionaries required by newer DXF
-        # versions. Laser cutting only needs ARC and LINE entities.
-        self.pair(1, "AC1009")
-        self.pair(9, "$INSUNITS")
-        self.pair(70, 4)  # millimeters
-        self.pair(0, "ENDSEC")
+        # Use the smallest widely-compatible R11/R12 structure.  Although
+        # $INSUNITS is a documented header variable in newer DXF releases,
+        # some AutoCAD 2016 import paths reject a hand-written AC1009 HEADER
+        # section.  AC1009 files may contain only the ENTITIES section; the
+        # numeric coordinates remain in millimeters and the cutter can use
+        # the drawing units directly.
         self.pair(0, "SECTION")
         self.pair(2, "ENTITIES")
 
