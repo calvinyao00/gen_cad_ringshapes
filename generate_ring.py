@@ -342,36 +342,11 @@ class DxfWriter:
     def pair(self, code: int, value: object) -> None:
         self.lines.extend((str(code), str(value)))
 
-    def header(self, center: Point = (0.0, 0.0), view_size: float = 300.0) -> None:
-        # Keep the R12 entity format, but provide the legacy view variables so
-        # AutoCAD opens the XY-plane geometry in a useful top view.  Do not
-        # write $INSUNITS here: some AutoCAD 2016 import paths reject that
-        # hand-written AC1009 header even though the coordinates are valid.
-        half_view = max(view_size / 2.0, 1.0)
-        self.pair(0, "SECTION")
-        self.pair(2, "HEADER")
-        self.pair(9, "$ACADVER")
-        self.pair(1, "AC1009")
-        self.pair(9, "$EXTMIN")
-        self.pair(10, fmt(center[0] - half_view))
-        self.pair(20, fmt(center[1] - half_view))
-        self.pair(30, "0")
-        self.pair(9, "$EXTMAX")
-        self.pair(10, fmt(center[0] + half_view))
-        self.pair(20, fmt(center[1] + half_view))
-        self.pair(30, "0")
-        self.pair(9, "$VIEWCTR")
-        self.pair(10, fmt(center[0]))
-        self.pair(20, fmt(center[1]))
-        self.pair(9, "$VIEWDIR")
-        self.pair(10, "0")
-        self.pair(20, "0")
-        self.pair(30, "1")
-        self.pair(9, "$VIEWSIZE")
-        self.pair(40, fmt(view_size))
-        self.pair(9, "$VIEWTWIST")
-        self.pair(50, "0")
-        self.pair(0, "ENDSEC")
+    def header(self) -> None:
+        # Use the smallest R11/R12 structure.  In particular, do not write a
+        # hand-authored HEADER or VPORT section: AutoCAD 2016 can reject
+        # otherwise valid AC1009 files when those sections are incomplete.
+        # The cutting coordinates are expressed directly in millimeters.
         self.pair(0, "SECTION")
         self.pair(2, "ENTITIES")
 
@@ -472,7 +447,7 @@ def generate_piece_dxf(
         notch_shape=notch_shape,
     )
     writer = DxfWriter()
-    writer.header(center=center, view_size=outer_radius * 2.4)
+    writer.header()
     # All individual files use the same local orientation. The nesting/CAD
     # program can rotate and place each copy wherever it fits on the plate.
     write_piece(writer, piece, center, rotation, sector_angle)
@@ -519,7 +494,7 @@ def generate_dxf(
         notch_shape=notch_shape,
     )
     writer = DxfWriter()
-    writer.header(center=center, view_size=outer_radius * 2.4)
+    writer.header()
     for index in range(parts):
         write_piece(writer, piece, center, rotation + index * step, step)
     output.write_text(writer.finish(), encoding="ascii")
