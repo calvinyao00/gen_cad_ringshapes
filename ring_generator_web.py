@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import sys
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -546,9 +547,19 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def default_output_directory() -> Path:
+    """Return a writable output directory outside PyInstaller's _internal."""
+
+    if getattr(sys, "frozen", False):
+        application_dir = Path(sys.executable).resolve().parent
+    else:
+        application_dir = Path(__file__).resolve().parent
+    return application_dir / "输出"
+
+
 def main() -> None:
     args = build_parser().parse_args()
-    default_output_dir = Path(__file__).resolve().parent
+    default_output_dir = default_output_directory()
     server = ThreadingHTTPServer((args.host, args.port), make_handler(default_output_dir))
     url = f"http://{args.host}:{server.server_port}/"
     print(f"环形拼接件 DXF 生成器已启动：{url}")

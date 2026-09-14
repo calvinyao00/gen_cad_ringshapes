@@ -14,6 +14,7 @@
 6. 解压 ZIP，双击 `环形拼接件生成器.exe`。
 
 目标 Windows 电脑不需要 Python、pip 或其他 Python 依赖，只需要浏览器。
+默认 DXF 输出到 EXE 同级的 `输出` 文件夹，不会写入 PyInstaller 的 `_internal` 文件夹。
 
 ## 本地构建
 
