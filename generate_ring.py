@@ -451,7 +451,9 @@ def generate_piece_dxf(
     # All individual files use the same local orientation. The nesting/CAD
     # program can rotate and place each copy wherever it fits on the plate.
     write_piece(writer, piece, center, rotation, sector_angle)
-    output.write_text(writer.finish(), encoding="ascii")
+    # Write bytes so Windows does not translate the already-formed CRLF
+    # endings a second time into CRCRLF.
+    output.write_bytes(writer.finish().encode("ascii"))
 
 
 def generate_dxf(
@@ -497,7 +499,9 @@ def generate_dxf(
     writer.header()
     for index in range(parts):
         write_piece(writer, piece, center, rotation + index * step, step)
-    output.write_text(writer.finish(), encoding="ascii")
+    # Write bytes so Windows does not translate the already-formed CRLF
+    # endings a second time into CRCRLF.
+    output.write_bytes(writer.finish().encode("ascii"))
 
 
 def build_parser() -> argparse.ArgumentParser:
