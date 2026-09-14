@@ -36,16 +36,9 @@ jobs:
           --name "环形拼接件生成器"
           ring_generator_gui.py
 
-      - name: 打包便携文件夹
-        shell: pwsh
-        run: >-
-          Compress-Archive
-          -Path "dist/环形拼接件生成器"
-          -DestinationPath "dist/环形拼接件生成器-windows.zip"
-
       - name: 上传 Windows 构建产物
         uses: actions/upload-artifact@v4
         with:
           name: 环形拼接件生成器-windows
-          path: dist/环形拼接件生成器-windows.zip
+          path: dist/环形拼接件生成器
           if-no-files-found: error
