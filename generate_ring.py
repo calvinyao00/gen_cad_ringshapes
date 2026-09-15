@@ -12,8 +12,10 @@ configurable, as is the notch shape (trapezoid or rectangular); when the
 number of parts is not four, the profile is angularly resized so all parts
 still close into one ring.
 
-The writer intentionally uses ARC and LINE entities, matching the source
-DXF, so no third-party DXF package is required.
+By default the writer emits two open R12 POLYLINE paths. Each path contains
+one exact circular-arc bulge and one keyed side, so a laser cutter can run
+the outer and inner portions separately. A legacy ARC/LINE mode is available
+with ``split_paths=False``.
 """
 
 from __future__ import annotations
@@ -39,6 +41,7 @@ DEFAULT_LASER_CLEARANCE = 0.3
 DEFAULT_NOTCH_SHAPE = "trapezoid"
 NOTCH_SHAPES = ("trapezoid", "rectangular")
 NOTCH_SHAPE_LABELS = {"trapezoid": "梯形", "rectangular": "矩形"}
+DEFAULT_SPLIT_PATHS = True
 # Automatic notch size as a fraction of the compensated radial ring width.
 # A smaller value leaves more material for spot-welded joints.
 AUTO_NOTCH_RATIO = 0.25
@@ -370,6 +373,34 @@ class DxfWriter:
         self.pair(21, fmt(end[1]))
         self.pair(31, "0")
 
+    def comment(self, value: str) -> None:
+        """Write an ignored DXF comment to mark a cutting-path boundary."""
+
+        self.pair(999, value)
+
+    def polyline(self, vertices: Sequence[Point], bulges: Sequence[float]) -> None:
+        """Write one open R12 2D polyline, including optional arc bulges."""
+
+        if len(vertices) < 2 or len(vertices) != len(bulges):
+            raise ValueError("切割路径至少需要两个点，并且点与弧度数量必须一致")
+        self.pair(0, "POLYLINE")
+        self.pair(8, "0")
+        self.pair(66, 1)
+        self.pair(70, 0)  # open 2D polyline
+        self.pair(10, "0")
+        self.pair(20, "0")
+        self.pair(30, "0")
+        for point, bulge in zip(vertices, bulges):
+            self.pair(0, "VERTEX")
+            self.pair(8, "0")
+            self.pair(10, fmt(point[0]))
+            self.pair(20, fmt(point[1]))
+            self.pair(30, "0")
+            if bulge:
+                self.pair(42, fmt(bulge))
+        self.pair(0, "SEQEND")
+        self.pair(8, "0")
+
     def finish(self) -> str:
         self.pair(0, "ENDSEC")
         self.pair(0, "EOF")
@@ -384,14 +415,44 @@ def write_piece(
     center: Point,
     rotation: float,
     sector_angle: float,
+    split_paths: bool = False,
 ) -> None:
     """Write one rotated sector."""
 
     def transform(point: Point) -> Point:
         return add(rotate(point, rotation), center)
 
-    # The source file uses both arcs with the same increasing-angle direction.
-    # Retain that convention for maximum compatibility.
+    if split_paths:
+        # Make two independent, continuous open paths.  The outer path runs
+        # from the start of the outer arc through the end-side notch to the
+        # end of the inner wall.  The inner path runs back through the inner
+        # arc and the start-side notch.  Together they describe the same
+        # closed outline, while the cutter can process them separately.
+        arc_bulge = math.tan(math.radians(sector_angle) / 4.0)
+
+        outer_vertices = [transform(piece.outer_start)] + [
+            transform(point) for point in piece.end_edge
+        ]
+        writer.comment("OUTER_CUT_PATH_BEGIN")
+        writer.polyline(
+            outer_vertices,
+            [arc_bulge] + [0.0] * (len(outer_vertices) - 1),
+        )
+        writer.comment("OUTER_CUT_PATH_END")
+
+        inner_vertices = [transform(piece.inner_end)] + [
+            transform(point) for point in reversed(piece.start_edge)
+        ]
+        writer.comment("INNER_CUT_PATH_BEGIN")
+        writer.polyline(
+            inner_vertices,
+            [-arc_bulge] + [0.0] * (len(inner_vertices) - 1),
+        )
+        writer.comment("INNER_CUT_PATH_END")
+        return
+
+    # The legacy mode uses separate ARC and LINE entities, matching the
+    # original source file.
     writer.arc(
         center,
         polar_radius(piece.outer_start),
@@ -422,6 +483,7 @@ def generate_piece_dxf(
     notch_shape: str = DEFAULT_NOTCH_SHAPE,
     plate_thickness: float = 0.0,
     rotation: float = 0.0,
+    split_paths: bool = DEFAULT_SPLIT_PATHS,
 ) -> None:
     """Generate one sector file for a ring divided into ``parts`` pieces."""
 
@@ -450,7 +512,7 @@ def generate_piece_dxf(
     writer.header()
     # All individual files use the same local orientation. The nesting/CAD
     # program can rotate and place each copy wherever it fits on the plate.
-    write_piece(writer, piece, center, rotation, sector_angle)
+    write_piece(writer, piece, center, rotation, sector_angle, split_paths=split_paths)
     # Write bytes so Windows does not translate the already-formed CRLF
     # endings a second time into CRCRLF.
     output.write_bytes(writer.finish().encode("ascii"))
@@ -469,6 +531,7 @@ def generate_dxf(
     plate_thickness: float = 0.0,
     rotation: float = 0.0,
     step: float | None = None,
+    split_paths: bool = DEFAULT_SPLIT_PATHS,
 ) -> None:
     """Generate a DXF containing ``parts`` sectors around one center."""
 
@@ -498,7 +561,14 @@ def generate_dxf(
     writer = DxfWriter()
     writer.header()
     for index in range(parts):
-        write_piece(writer, piece, center, rotation + index * step, step)
+        write_piece(
+            writer,
+            piece,
+            center,
+            rotation + index * step,
+            step,
+            split_paths=split_paths,
+        )
     # Write bytes so Windows does not translate the already-formed CRLF
     # endings a second time into CRCRLF.
     output.write_bytes(writer.finish().encode("ascii"))
@@ -583,6 +653,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="angle between sectors; defaults to 360/parts",
     )
+    parser.add_argument(
+        "--split-paths",
+        action=argparse.BooleanOptionalAction,
+        default=DEFAULT_SPLIT_PATHS,
+        help="write separate outer and inner cutting paths (default: enabled)",
+    )
     return parser
 
 
@@ -625,6 +701,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             plate_thickness=args.plate_thickness,
             rotation=args.rotation,
             step=args.step,
+            split_paths=args.split_paths,
         )
     except (OSError, ValueError) as exc:
         parser.error(str(exc))

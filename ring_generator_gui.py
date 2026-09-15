@@ -115,6 +115,7 @@ class RingGeneratorApp:
         self.clearance_var = tk.StringVar(value=format_value(DEFAULT_LASER_CLEARANCE))
         self.output_dir_var = tk.StringVar(value=str(default_output_directory()))
         self.output_mode_var = tk.StringVar(value="单个零件模板（推荐排版）")
+        self.split_paths_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="就绪")
         self.geometry_var = tk.StringVar(value="")
         self.filename_var = tk.StringVar(value="")
@@ -203,6 +204,19 @@ class RingGeneratorApp:
         self.mode_box.grid(row=row, column=1, columnspan=2, sticky="ew", pady=5)
         self.mode_box.bind("<<ComboboxSelected>>", lambda _event: self.update_preview())
         row += 1
+
+        ttk.Checkbutton(
+            controls,
+            text="内外轮廓分成两条切割路径",
+            variable=self.split_paths_var,
+        ).grid(row=row, column=0, columnspan=3, sticky="w", pady=(6, 3))
+        ttk.Label(
+            controls,
+            text="外弧与一侧咬合边为一条路径，内弧与另一侧咬合边为另一条路径。",
+            wraplength=330,
+            foreground="#59636e",
+        ).grid(row=row + 1, column=0, columnspan=3, sticky="w", pady=(0, 8))
+        row += 2
 
         ttk.Label(controls, text="输出文件夹").grid(row=row, column=0, sticky="w", pady=5)
         output_frame = ttk.Frame(controls)
@@ -328,6 +342,7 @@ class RingGeneratorApp:
             "notch": notch,
             "shape": shape,
             "mode": mode,
+            "split_paths": self.split_paths_var.get(),
         }
 
     def filename_for(self, values: dict[str, object]) -> str:
@@ -447,6 +462,7 @@ class RingGeneratorApp:
                 "notch_size": values["notch"],
                 "clearance": values["clearance"],
                 "notch_shape": values["shape"],
+                "split_paths": values["split_paths"],
             }
             if values["mode"] == "individual":
                 generate_piece_dxf(output, **common)
