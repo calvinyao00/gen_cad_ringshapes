@@ -13,10 +13,11 @@ from tkinter import filedialog, messagebox, ttk
 
 from generate_ring import (
     DEFAULT_LASER_CLEARANCE,
-    DEFAULT_NOTCH_SIZE,
+    DEFAULT_NOTCH_PERCENTAGE,
     DEFAULT_NOTCH_SHAPE,
+    TRAPEZOID_NOTCH_HEIGHT,
     NOTCH_SHAPE_LABELS,
-    auto_notch_size,
+    automatic_notch_value,
     compensated_radii,
     generate_dxf,
     generate_piece_dxf,
@@ -111,7 +112,7 @@ class RingGeneratorApp:
         self.parts_var = tk.StringVar(value="4")
         self.shape_var = tk.StringVar(value=NOTCH_SHAPE_LABELS[DEFAULT_NOTCH_SHAPE])
         self.auto_notch_var = tk.BooleanVar(value=True)
-        self.notch_var = tk.StringVar(value=format_value(DEFAULT_NOTCH_SIZE))
+        self.notch_var = tk.StringVar(value=format_value(DEFAULT_NOTCH_PERCENTAGE))
         self.clearance_var = tk.StringVar(value=format_value(DEFAULT_LASER_CLEARANCE))
         self.output_dir_var = tk.StringVar(value=str(default_output_directory()))
         self.output_mode_var = tk.StringVar(value="单个零件模板（推荐排版）")
@@ -122,6 +123,7 @@ class RingGeneratorApp:
         self._updating_preview = False
 
         self.build_ui()
+        self.update_notch_label()
         self.update_notch_state()
         self.update_preview()
 
@@ -162,7 +164,7 @@ class RingGeneratorApp:
             width=25,
         )
         self.shape_box.grid(row=row, column=1, columnspan=2, sticky="ew", pady=5)
-        self.shape_box.bind("<<ComboboxSelected>>", lambda _event: self.update_preview())
+        self.shape_box.bind("<<ComboboxSelected>>", self.shape_changed)
         row += 1
 
         self.auto_check = ttk.Checkbutton(
@@ -174,13 +176,14 @@ class RingGeneratorApp:
         self.auto_check.grid(row=row, column=0, columnspan=3, sticky="w", pady=(8, 3))
         row += 1
         notch_row = row
-        row = self.add_entry(controls, row, "缺口尺寸（毫米）", self.notch_var)
+        row = self.add_entry(controls, row, "梯形咬合下底占环宽（%）", self.notch_var)
+        self.notch_label = controls.grid_slaves(row=notch_row, column=0)[0]
         self.notch_entry = controls.grid_slaves(row=notch_row, column=1)[0]
         row = self.add_entry(controls, row, "激光间隙（毫米）", self.clearance_var)
 
         ttk.Label(
             controls,
-            text="默认激光间隙 0.3 mm。梯形缺口适合自定位；矩形缺口便于规则点焊。",
+            text="梯形高度固定 8 mm；百分比=咬合下底宽度÷切割环宽。矩形模式输入缺口高度。",
             wraplength=330,
             foreground="#59636e",
         ).grid(row=row, column=0, columnspan=3, sticky="w", pady=(0, 12))
@@ -287,6 +290,18 @@ class RingGeneratorApp:
             self.notch_entry.configure(state="disabled" if self.auto_notch_var.get() else "normal")
         self.update_preview()
 
+    def update_notch_label(self) -> None:
+        if not hasattr(self, "notch_label"):
+            return
+        if self.shape_var.get() == "梯形":
+            self.notch_label.configure(text="梯形咬合下底占环宽（%）")
+        else:
+            self.notch_label.configure(text="矩形缺口高度（毫米）")
+
+    def shape_changed(self, _event=None) -> None:
+        self.update_notch_label()
+        self.update_preview()
+
     def choose_output_directory(self) -> None:
         current = Path(self.output_dir_var.get()).expanduser()
         initial = current if current.exists() else default_output_directory()
@@ -322,14 +337,18 @@ class RingGeneratorApp:
 
         parts = int(parts_value)
         cut_inner, cut_outer = compensated_radii(inner / 2.0, outer / 2.0, plate)
-        notch = (
-            auto_notch_size(cut_inner, cut_outer, clearance)
-            if self.auto_notch_var.get()
-            else number(self.notch_var, "缺口尺寸")
-        )
-        if notch <= 0:
-            raise ValueError("缺口尺寸必须大于 0")
         shape = "trapezoid" if self.shape_var.get() == "梯形" else "rectangular"
+        if self.auto_notch_var.get():
+            notch = automatic_notch_value(cut_inner, cut_outer, clearance, shape)
+        else:
+            if shape == "trapezoid":
+                notch = number(self.notch_var, "梯形咬合下底比例")
+                if notch <= 0 or notch > 100:
+                    raise ValueError("梯形咬合下底比例必须大于 0 且不超过 100%")
+            else:
+                notch = number(self.notch_var, "矩形缺口高度")
+                if notch <= 0:
+                    raise ValueError("矩形缺口高度必须大于 0")
         mode = "individual" if self.output_mode_var.get().startswith("单个") else "ring"
         return {
             "inner": inner,
@@ -367,14 +386,24 @@ class RingGeneratorApp:
                 self.notch_var.set(format_value(values["notch"]))
             self.filename_var.set(self.filename_for(values))
             wall = values["cut_outer"] - values["cut_inner"]
-            web_factor = 1.58 if values["shape"] == "trapezoid" else 2.0
-            web = wall - web_factor * values["notch"]
             shape_label = NOTCH_SHAPE_LABELS[values["shape"]]
-            self.geometry_var.set(
-                f"实际切割环宽：{format_value(wall)} mm；"
-                f"自动{shape_label}缺口：{format_value(values['notch'])} mm；"
-                f"估算连续材料：{format_value(web)} mm"
-            )
+            source_label = "自动" if self.auto_notch_var.get() else "手动"
+            if values["shape"] == "trapezoid":
+                base_width = wall * float(values["notch"]) / 100.0
+                web = wall - 1.58 * TRAPEZOID_NOTCH_HEIGHT
+                self.geometry_var.set(
+                    f"实际切割环宽：{format_value(wall)} mm；"
+                    f"{source_label}{shape_label}下底：{format_value(values['notch'])}% "
+                    f"（{format_value(base_width)} mm）；高度固定 8 mm；"
+                    f"估算连续材料：{format_value(web)} mm"
+                )
+            else:
+                web = wall - 2.0 * float(values["notch"])
+                self.geometry_var.set(
+                    f"实际切割环宽：{format_value(wall)} mm；"
+                    f"{source_label}{shape_label}高度：{format_value(values['notch'])} mm；"
+                    f"估算连续材料：{format_value(web)} mm"
+                )
             self.status_var.set("就绪")
             self.draw_preview(values)
         except (OSError, ValueError, TypeError) as exc:

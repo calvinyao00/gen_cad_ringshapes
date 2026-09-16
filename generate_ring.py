@@ -7,10 +7,12 @@ The default geometry is measured from the supplied DXF file:
 
 The source sector is a 90-degree annular sector with an outer radius of 131
 mm and an inner radius of 101.5 mm.  Its two ends use slightly different
-keyed profiles.  The number of parts, notch size, and laser clearance are
+keyed profiles. The number of parts, notch control, and laser clearance are
 configurable, as is the notch shape (trapezoid or rectangular); when the
 number of parts is not four, the profile is angularly resized so all parts
-still close into one ring.
+still close into one ring. For a trapezoid, the height is fixed at 8 mm and
+the control is the lower-base width as a percentage of the compensated radial
+ring wall. For a rectangle, the control remains the notch height in mm.
 
 By default the writer emits two open R12 POLYLINE paths. Each path contains
 one exact circular-arc bulge and one keyed side, so a laser cutter can run
@@ -36,7 +38,11 @@ SOURCE_START_ANGLE = 135.0
 SOURCE_END_ANGLE = 225.0
 SOURCE_CENTER_ANGLE = 180.0
 SOURCE_SECTOR_ANGLE = SOURCE_END_ANGLE - SOURCE_START_ANGLE
+# Rectangular-notch height, in millimeters. Trapezoids use the fixed height
+# below and control their lower-base width by percentage.
 DEFAULT_NOTCH_SIZE = 10.0
+DEFAULT_NOTCH_PERCENTAGE = 25.0
+TRAPEZOID_NOTCH_HEIGHT = 8.0
 DEFAULT_LASER_CLEARANCE = 0.3
 DEFAULT_NOTCH_SHAPE = "trapezoid"
 NOTCH_SHAPES = ("trapezoid", "rectangular")
@@ -112,13 +118,15 @@ def resized_piece(
     The source end profile, expressed in radial/tangential coordinates, is:
 
     * trapezoidal radial steps of approximately 0.99 and 0.79 times the
-      notch size, or equal radial steps for a rectangular notch;
-    * a 0.5-notch tangential key width;
+      fixed 8 mm height, with the lower-base width controlled as a percentage
+      of the compensated radial ring wall;
+    * equal radial steps for a rectangular notch, with the notch height in
+      millimeters;
+    * a tangential key width derived from the selected control;
     * a clearance offset on the mating edge.
 
-    At the defaults (10 mm notch and 0.3 mm clearance), this reproduces the
-    supplied DXF profile.  The end profile is intentionally asymmetric so
-    neighboring rotated parts mate with clearance rather than overlapping.
+    The end profile is intentionally asymmetric so neighboring rotated parts
+    mate with clearance rather than overlapping.
     """
 
     if inner_radius <= 0:
@@ -127,10 +135,6 @@ def resized_piece(
         raise ValueError("外半径必须大于内半径")
     if sector_angle <= 0 or sector_angle > 360:
         raise ValueError("扇区角度必须大于 0 且不超过 360 度")
-    if notch_size is None:
-        notch_size = auto_notch_size(inner_radius, outer_radius, clearance)
-    if notch_size <= 0:
-        raise ValueError("缺口尺寸必须大于 0")
     if clearance < 0:
         raise ValueError("激光间隙不能为负数")
     notch_shape = notch_shape.lower()
@@ -138,8 +142,27 @@ def resized_piece(
         raise ValueError("缺口形状必须是梯形或矩形")
 
     wall = outer_radius - inner_radius
-    if 1.58 * notch_size >= wall:
-        raise ValueError("缺口尺寸对于当前环宽过大，请减小缺口或增大外径")
+    if notch_shape == "trapezoid":
+        notch_percentage = (
+            DEFAULT_NOTCH_PERCENTAGE if notch_size is None else notch_size
+        )
+        if notch_percentage <= 0 or notch_percentage > 100:
+            raise ValueError("梯形咬合下底比例必须大于 0 且不超过 100%")
+        notch_height = TRAPEZOID_NOTCH_HEIGHT
+        lower_base_width = wall * notch_percentage / 100.0
+    else:
+        notch_height = (
+            auto_notch_size(inner_radius, outer_radius, clearance)
+            if notch_size is None
+            else notch_size
+        )
+        if notch_height <= 0:
+            raise ValueError("矩形缺口高度必须大于 0")
+        # Preserve the original rectangular-profile proportion.
+        lower_base_width = 0.5 * notch_height
+
+    if 1.58 * notch_height >= wall:
+        raise ValueError("缺口高度对于当前环宽过大，请减小缺口或增大外径")
 
     start_angle = SOURCE_CENTER_ANGLE - sector_angle / 2.0
 
@@ -156,22 +179,22 @@ def resized_piece(
     # The source profile is trapezoidal. A rectangular profile keeps the two
     # shoulder pairs at constant radii, creating square transitions.
     if notch_shape == "rectangular":
-        outer_shoulder = outer_radius - notch_size
-        inner_shoulder = inner_radius + notch_size
+        outer_shoulder = outer_radius - notch_height
+        inner_shoulder = inner_radius + notch_height
     else:
-        outer_shoulder = outer_radius - 0.99 * notch_size
-        inner_shoulder = inner_radius + 0.99 * notch_size
+        outer_shoulder = outer_radius - 0.99 * notch_height
+        inner_shoulder = inner_radius + 0.99 * notch_height
 
     radial_values = (
         outer_radius,
         outer_shoulder,
-        outer_radius - (0.79 * notch_size if notch_shape == "trapezoid" else notch_size),
-        inner_radius + (0.79 * notch_size if notch_shape == "trapezoid" else notch_size),
+        outer_radius - (0.79 * notch_height if notch_shape == "trapezoid" else notch_height),
+        inner_radius + (0.79 * notch_height if notch_shape == "trapezoid" else notch_height),
         inner_shoulder,
         inner_radius,
     )
 
-    tangent_values = (0.0, 0.0, 0.5 * notch_size, 0.5 * notch_size, 0.0, 0.0)
+    tangent_values = (0.0, 0.0, lower_base_width, lower_base_width, 0.0, 0.0)
     start_edge = tuple(
         basis_point(radius, tangent)
         for radius, tangent in zip(radial_values, tangent_values)
@@ -226,6 +249,26 @@ def auto_notch_size(
     if maximum <= 0:
         raise ValueError("环宽对于当前激光间隙过薄")
     return min(nominal, maximum)
+
+
+def automatic_notch_value(
+    inner_radius: float,
+    outer_radius: float,
+    clearance: float = DEFAULT_LASER_CLEARANCE,
+    notch_shape: str = DEFAULT_NOTCH_SHAPE,
+) -> float:
+    """Return the automatic control value for the selected notch shape.
+
+    Trapezoids use a percentage because their height is fixed. Rectangles use
+    the original automatic height calculation in millimeters.
+    """
+
+    notch_shape = notch_shape.lower()
+    if notch_shape not in NOTCH_SHAPES:
+        raise ValueError("缺口形状必须是梯形或矩形")
+    if notch_shape == "trapezoid":
+        return DEFAULT_NOTCH_PERCENTAGE
+    return auto_notch_size(inner_radius, outer_radius, clearance)
 
 
 def format_value(value: float) -> str:
@@ -496,7 +539,7 @@ def generate_piece_dxf(
     )
     sector_angle = 360.0 / parts
     effective_notch_size = (
-        auto_notch_size(inner_radius, outer_radius, clearance)
+        automatic_notch_value(inner_radius, outer_radius, clearance, notch_shape)
         if notch_size is None
         else notch_size
     )
@@ -546,7 +589,7 @@ def generate_dxf(
         plate_thickness,
     )
     effective_notch_size = (
-        auto_notch_size(inner_radius, outer_radius, clearance)
+        automatic_notch_value(inner_radius, outer_radius, clearance, notch_shape)
         if notch_size is None
         else notch_size
     )
@@ -621,7 +664,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--notch-size",
         type=float,
         default=None,
-        help="manual keyed notch size in mm; omitted means automatic sizing",
+        help=(
+            "trapezoid lower-base width as percent of ring wall; "
+            "rectangular notch height in mm; omitted means automatic sizing"
+        ),
     )
     parser.add_argument(
         "--clearance",
@@ -678,7 +724,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.plate_thickness,
     )
     effective_notch_size = (
-        auto_notch_size(effective_inner_radius, effective_outer_radius, args.clearance)
+        automatic_notch_value(
+            effective_inner_radius,
+            effective_outer_radius,
+            args.clearance,
+            args.notch_shape,
+        )
         if args.notch_size is None
         else args.notch_size
     )
