@@ -16,6 +16,7 @@ from generate_ring import (
     DEFAULT_NOTCH_PERCENTAGE,
     DEFAULT_NOTCH_SHAPE,
     DEFAULT_TRAPEZOID_HEIGHT,
+    TRAPEZOID_TOP_BASE_RATIO,
     NOTCH_SHAPE_LABELS,
     automatic_notch_value,
     compensated_radii,
@@ -189,7 +190,7 @@ class RingGeneratorApp:
 
         ttk.Label(
             controls,
-            text="梯形高度默认 8 mm，可单独调整；百分比=咬合下底宽度÷切割环宽。矩形模式输入缺口高度。",
+            text="下底比例只改变沿环宽方向的下底长度；梯形高度单独控制切向高度，默认 8 mm。",
             wraplength=330,
             foreground="#59636e",
         ).grid(row=row, column=0, columnspan=3, sticky="w", pady=(0, 12))
@@ -406,12 +407,13 @@ class RingGeneratorApp:
             if values["shape"] == "trapezoid":
                 base_width = wall * float(values["notch"]) / 100.0
                 trapezoid_height = float(values["trapezoid_height"])
-                web = wall - 1.58 * trapezoid_height
+                top_base_width = base_width * TRAPEZOID_TOP_BASE_RATIO
+                material_each_side = (wall - top_base_width) / 2.0
                 self.geometry_var.set(
                     f"实际切割环宽：{format_value(wall)} mm；"
                     f"{source_label}{shape_label}下底：{format_value(values['notch'])}% "
                     f"（{format_value(base_width)} mm）；高度：{format_value(trapezoid_height)} mm；"
-                    f"估算连续材料：{format_value(web)} mm"
+                    f"两侧材料：各 {format_value(material_each_side)} mm"
                 )
             else:
                 web = wall - 2.0 * float(values["notch"])

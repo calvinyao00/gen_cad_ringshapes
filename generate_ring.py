@@ -46,6 +46,9 @@ SOURCE_SECTOR_ANGLE = SOURCE_END_ANGLE - SOURCE_START_ANGLE
 DEFAULT_NOTCH_SIZE = 10.0
 DEFAULT_NOTCH_PERCENTAGE = 25.0
 DEFAULT_TRAPEZOID_HEIGHT = 8.0
+# The source profile's short base is approximately 70% of its lower base.
+# Keeping this ratio makes the percentage control only the trapezoid width.
+TRAPEZOID_TOP_BASE_RATIO = 0.70
 # Backward-compatible name retained for callers that imported the old
 # constant. It now represents the default, rather than a forced height.
 TRAPEZOID_NOTCH_HEIGHT = DEFAULT_TRAPEZOID_HEIGHT
@@ -124,9 +127,10 @@ def resized_piece(
 
     The source end profile, expressed in radial/tangential coordinates, is:
 
-    * trapezoidal radial steps of approximately 0.99 and 0.79 times the
-      selected height, with the lower-base width controlled as a percentage
-      of the compensated radial ring wall;
+    * trapezoid lower-base width, measured along the radial ring wall, as a
+      percentage of that wall;
+    * independently adjustable trapezoid height, measured in the tangential
+      direction between its two bases;
     * equal radial steps for a rectangular notch, with the notch height in
       millimeters;
     * a tangential key width derived from the selected control;
@@ -159,6 +163,17 @@ def resized_piece(
             raise ValueError("梯形高度必须大于 0")
         notch_height = trapezoid_height
         lower_base_width = wall * notch_percentage / 100.0
+        upper_base_width = lower_base_width * TRAPEZOID_TOP_BASE_RATIO
+        base_center = (outer_radius + inner_radius) / 2.0
+        radial_values = (
+            outer_radius,
+            base_center + upper_base_width / 2.0,
+            base_center + lower_base_width / 2.0,
+            base_center - lower_base_width / 2.0,
+            base_center - upper_base_width / 2.0,
+            inner_radius,
+        )
+        tangent_values = (0.0, 0.0, notch_height, notch_height, 0.0, 0.0)
     else:
         notch_height = (
             auto_notch_size(inner_radius, outer_radius, clearance)
@@ -168,48 +183,37 @@ def resized_piece(
         if notch_height <= 0:
             raise ValueError("矩形缺口高度必须大于 0")
         # Preserve the original rectangular-profile proportion.
-        lower_base_width = 0.5 * notch_height
-
-    if 1.58 * notch_height >= wall:
-        raise ValueError("缺口高度对于当前环宽过大，请减小缺口或增大外径")
+        tangent_width = 0.5 * notch_height
+        if 1.58 * notch_height >= wall:
+            raise ValueError("缺口高度对于当前环宽过大，请减小缺口或增大外径")
+        radial_values = (
+            outer_radius,
+            outer_radius - notch_height,
+            outer_radius - notch_height,
+            inner_radius + notch_height,
+            inner_radius + notch_height,
+            inner_radius,
+        )
+        tangent_values = (0.0, 0.0, tangent_width, tangent_width, 0.0, 0.0)
 
     start_angle = SOURCE_CENTER_ANGLE - sector_angle / 2.0
 
     def basis_point(radius: float, tangent: float) -> Point:
         if abs(tangent) >= radius:
-            raise ValueError("咬合宽度对于当前半径过大")
+            raise ValueError("缺口切向高度对于当前半径过大")
         angle = math.radians(start_angle)
         radial = (math.cos(angle), math.sin(angle))
         # This tangent direction matches the keyed profile in the source DXF.
         tangent_axis = (math.sin(angle), -math.cos(angle))
         # Keep ``radius`` as the true distance from the ring center. Without
-        # this correction, increasing the tangential width also increases the
-        # point's polar radius and makes the notch height drift in the preview.
+        # this correction, increasing tangential height also changes the
+        # point's polar radius and makes the preview geometry drift.
         radial_component = math.sqrt(radius * radius - tangent * tangent)
         return (
             radial_component * radial[0] + tangent * tangent_axis[0],
             radial_component * radial[1] + tangent * tangent_axis[1],
         )
 
-    # The source profile is trapezoidal. A rectangular profile keeps the two
-    # shoulder pairs at constant radii, creating square transitions.
-    if notch_shape == "rectangular":
-        outer_shoulder = outer_radius - notch_height
-        inner_shoulder = inner_radius + notch_height
-    else:
-        outer_shoulder = outer_radius - 0.99 * notch_height
-        inner_shoulder = inner_radius + 0.99 * notch_height
-
-    radial_values = (
-        outer_radius,
-        outer_shoulder,
-        outer_radius - (0.79 * notch_height if notch_shape == "trapezoid" else notch_height),
-        inner_radius + (0.79 * notch_height if notch_shape == "trapezoid" else notch_height),
-        inner_shoulder,
-        inner_radius,
-    )
-
-    tangent_values = (0.0, 0.0, lower_base_width, lower_base_width, 0.0, 0.0)
     start_edge = tuple(
         basis_point(radius, tangent)
         for radius, tangent in zip(radial_values, tangent_values)
