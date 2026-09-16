@@ -254,7 +254,7 @@ python3 ring_generator_gui.py
 也可以打开命令提示符，在程序文件夹中运行：
 
 ```text
-py -3.8 ring_generator_gui.py
+py ring_generator_gui.py
 ```
 
 ### 提示外径必须大于内径

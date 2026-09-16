@@ -15,8 +15,8 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo 正在安装 Windows 7 兼容版 PyInstaller...
-py -3.8 -m pip install pyinstaller==5.13.2
+echo 正在安装或更新 PyInstaller...
+py -3 -m pip install --upgrade pyinstaller
 if errorlevel 1 (
     echo PyInstaller 安装失败。
     pause
@@ -24,7 +24,7 @@ if errorlevel 1 (
 )
 
 echo 正在构建 EXE，请稍候...
-py -3.8 -m PyInstaller --clean --noconfirm --onedir --windowed --noupx --name "环形拼接件生成器" ring_generator_gui.py
+py -3 -m PyInstaller --clean --noconfirm --onedir --windowed --name "环形拼接件生成器" ring_generator_gui.py
 if errorlevel 1 (
     echo 构建失败。
     pause
