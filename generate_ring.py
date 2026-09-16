@@ -10,9 +10,10 @@ mm and an inner radius of 101.5 mm.  Its two ends use slightly different
 keyed profiles. The number of parts, notch control, and laser clearance are
 configurable, as is the notch shape (trapezoid or rectangular); when the
 number of parts is not four, the profile is angularly resized so all parts
-still close into one ring. For a trapezoid, the height is fixed at 8 mm and
-the control is the lower-base width as a percentage of the compensated radial
-ring wall. For a rectangle, the control remains the notch height in mm.
+still close into one ring. For a trapezoid, the height defaults to 8 mm and
+is independently adjustable; the lower-base width is controlled as a
+percentage of the compensated radial ring wall. For a rectangle, the control
+remains the notch height in mm.
 
 By default the writer emits two open R12 POLYLINE paths. Each path contains
 one exact circular-arc bulge and one keyed side, so a laser cutter can run
@@ -40,11 +41,14 @@ SOURCE_START_ANGLE = 135.0
 SOURCE_END_ANGLE = 225.0
 SOURCE_CENTER_ANGLE = 180.0
 SOURCE_SECTOR_ANGLE = SOURCE_END_ANGLE - SOURCE_START_ANGLE
-# Rectangular-notch height, in millimeters. Trapezoids use the fixed height
-# below and control their lower-base width by percentage.
+# Rectangular-notch height, in millimeters. Trapezoids use a separate height
+# control (8 mm by default) and control their lower-base width by percentage.
 DEFAULT_NOTCH_SIZE = 10.0
 DEFAULT_NOTCH_PERCENTAGE = 25.0
-TRAPEZOID_NOTCH_HEIGHT = 8.0
+DEFAULT_TRAPEZOID_HEIGHT = 8.0
+# Backward-compatible name retained for callers that imported the old
+# constant. It now represents the default, rather than a forced height.
+TRAPEZOID_NOTCH_HEIGHT = DEFAULT_TRAPEZOID_HEIGHT
 DEFAULT_LASER_CLEARANCE = 0.3
 DEFAULT_NOTCH_SHAPE = "trapezoid"
 NOTCH_SHAPES = ("trapezoid", "rectangular")
@@ -114,13 +118,14 @@ def resized_piece(
     notch_size: float | None = None,
     clearance: float = DEFAULT_LASER_CLEARANCE,
     notch_shape: str = DEFAULT_NOTCH_SHAPE,
+    trapezoid_height: float = DEFAULT_TRAPEZOID_HEIGHT,
 ) -> PieceGeometry:
     """Build one sector with adjustable notch size and mating clearance.
 
     The source end profile, expressed in radial/tangential coordinates, is:
 
     * trapezoidal radial steps of approximately 0.99 and 0.79 times the
-      fixed 8 mm height, with the lower-base width controlled as a percentage
+      selected height, with the lower-base width controlled as a percentage
       of the compensated radial ring wall;
     * equal radial steps for a rectangular notch, with the notch height in
       millimeters;
@@ -150,7 +155,9 @@ def resized_piece(
         )
         if notch_percentage <= 0 or notch_percentage > 100:
             raise ValueError("梯形咬合下底比例必须大于 0 且不超过 100%")
-        notch_height = TRAPEZOID_NOTCH_HEIGHT
+        if trapezoid_height <= 0:
+            raise ValueError("梯形高度必须大于 0")
+        notch_height = trapezoid_height
         lower_base_width = wall * notch_percentage / 100.0
     else:
         notch_height = (
@@ -169,13 +176,19 @@ def resized_piece(
     start_angle = SOURCE_CENTER_ANGLE - sector_angle / 2.0
 
     def basis_point(radius: float, tangent: float) -> Point:
+        if abs(tangent) >= radius:
+            raise ValueError("咬合宽度对于当前半径过大")
         angle = math.radians(start_angle)
         radial = (math.cos(angle), math.sin(angle))
         # This tangent direction matches the keyed profile in the source DXF.
         tangent_axis = (math.sin(angle), -math.cos(angle))
+        # Keep ``radius`` as the true distance from the ring center. Without
+        # this correction, increasing the tangential width also increases the
+        # point's polar radius and makes the notch height drift in the preview.
+        radial_component = math.sqrt(radius * radius - tangent * tangent)
         return (
-            radius * radial[0] + tangent * tangent_axis[0],
-            radius * radial[1] + tangent * tangent_axis[1],
+            radial_component * radial[0] + tangent * tangent_axis[0],
+            radial_component * radial[1] + tangent * tangent_axis[1],
         )
 
     # The source profile is trapezoidal. A rectangular profile keeps the two
@@ -526,6 +539,7 @@ def generate_piece_dxf(
     notch_size: float | None = None,
     clearance: float = DEFAULT_LASER_CLEARANCE,
     notch_shape: str = DEFAULT_NOTCH_SHAPE,
+    trapezoid_height: float = DEFAULT_TRAPEZOID_HEIGHT,
     plate_thickness: float = 0.0,
     rotation: float = 0.0,
     split_paths: bool = DEFAULT_SPLIT_PATHS,
@@ -552,6 +566,7 @@ def generate_piece_dxf(
         notch_size=effective_notch_size,
         clearance=clearance,
         notch_shape=notch_shape,
+        trapezoid_height=trapezoid_height,
     )
     writer = DxfWriter()
     writer.header()
@@ -573,6 +588,7 @@ def generate_dxf(
     notch_size: float | None = None,
     clearance: float = DEFAULT_LASER_CLEARANCE,
     notch_shape: str = DEFAULT_NOTCH_SHAPE,
+    trapezoid_height: float = DEFAULT_TRAPEZOID_HEIGHT,
     plate_thickness: float = 0.0,
     rotation: float = 0.0,
     step: float | None = None,
@@ -602,6 +618,7 @@ def generate_dxf(
         notch_size=effective_notch_size,
         clearance=clearance,
         notch_shape=notch_shape,
+        trapezoid_height=trapezoid_height,
     )
     writer = DxfWriter()
     writer.header()
@@ -670,6 +687,12 @@ def build_parser() -> argparse.ArgumentParser:
             "trapezoid lower-base width as percent of ring wall; "
             "rectangular notch height in mm; omitted means automatic sizing"
         ),
+    )
+    parser.add_argument(
+        "--trapezoid-height",
+        type=float,
+        default=DEFAULT_TRAPEZOID_HEIGHT,
+        help=f"trapezoid height in mm (default: {DEFAULT_TRAPEZOID_HEIGHT})",
     )
     parser.add_argument(
         "--clearance",
@@ -758,6 +781,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             notch_size=effective_notch_size,
             clearance=args.clearance,
             notch_shape=args.notch_shape,
+            trapezoid_height=args.trapezoid_height,
             plate_thickness=args.plate_thickness,
             rotation=args.rotation,
             step=args.step,

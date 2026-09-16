@@ -15,7 +15,7 @@ from generate_ring import (
     DEFAULT_LASER_CLEARANCE,
     DEFAULT_NOTCH_PERCENTAGE,
     DEFAULT_NOTCH_SHAPE,
-    TRAPEZOID_NOTCH_HEIGHT,
+    DEFAULT_TRAPEZOID_HEIGHT,
     NOTCH_SHAPE_LABELS,
     automatic_notch_value,
     compensated_radii,
@@ -113,6 +113,7 @@ class RingGeneratorApp:
         self.shape_var = tk.StringVar(value=NOTCH_SHAPE_LABELS[DEFAULT_NOTCH_SHAPE])
         self.auto_notch_var = tk.BooleanVar(value=True)
         self.notch_var = tk.StringVar(value=format_value(DEFAULT_NOTCH_PERCENTAGE))
+        self.trapezoid_height_var = tk.StringVar(value=format_value(DEFAULT_TRAPEZOID_HEIGHT))
         self.clearance_var = tk.StringVar(value=format_value(DEFAULT_LASER_CLEARANCE))
         self.output_dir_var = tk.StringVar(value=str(default_output_directory()))
         self.output_mode_var = tk.StringVar(value="单个零件模板（推荐排版）")
@@ -179,11 +180,16 @@ class RingGeneratorApp:
         row = self.add_entry(controls, row, "梯形咬合下底占环宽（%）", self.notch_var)
         self.notch_label = controls.grid_slaves(row=notch_row, column=0)[0]
         self.notch_entry = controls.grid_slaves(row=notch_row, column=1)[0]
+        trapezoid_height_row = row
+        row = self.add_entry(controls, row, "梯形高度（毫米）", self.trapezoid_height_var)
+        self.trapezoid_height_entry = controls.grid_slaves(
+            row=trapezoid_height_row, column=1
+        )[0]
         row = self.add_entry(controls, row, "激光间隙（毫米）", self.clearance_var)
 
         ttk.Label(
             controls,
-            text="梯形高度固定 8 mm；百分比=咬合下底宽度÷切割环宽。矩形模式输入缺口高度。",
+            text="梯形高度默认 8 mm，可单独调整；百分比=咬合下底宽度÷切割环宽。矩形模式输入缺口高度。",
             wraplength=330,
             foreground="#59636e",
         ).grid(row=row, column=0, columnspan=3, sticky="w", pady=(0, 12))
@@ -274,6 +280,7 @@ class RingGeneratorApp:
             self.plate_var,
             self.parts_var,
             self.notch_var,
+            self.trapezoid_height_var,
             self.clearance_var,
         ):
             variable.trace_add("write", lambda *_args: self.update_preview())
@@ -288,6 +295,10 @@ class RingGeneratorApp:
     def update_notch_state(self) -> None:
         if hasattr(self, "notch_entry"):
             self.notch_entry.configure(state="disabled" if self.auto_notch_var.get() else "normal")
+        if hasattr(self, "trapezoid_height_entry"):
+            self.trapezoid_height_entry.configure(
+                state="normal" if self.shape_var.get() == "梯形" else "disabled"
+            )
         self.update_preview()
 
     def update_notch_label(self) -> None:
@@ -300,7 +311,7 @@ class RingGeneratorApp:
 
     def shape_changed(self, _event=None) -> None:
         self.update_notch_label()
-        self.update_preview()
+        self.update_notch_state()
 
     def choose_output_directory(self) -> None:
         current = Path(self.output_dir_var.get()).expanduser()
@@ -338,6 +349,9 @@ class RingGeneratorApp:
         parts = int(parts_value)
         cut_inner, cut_outer = compensated_radii(inner / 2.0, outer / 2.0, plate)
         shape = "trapezoid" if self.shape_var.get() == "梯形" else "rectangular"
+        trapezoid_height = number(self.trapezoid_height_var, "梯形高度")
+        if shape == "trapezoid" and trapezoid_height <= 0:
+            raise ValueError("梯形高度必须大于 0")
         if self.auto_notch_var.get():
             notch = automatic_notch_value(cut_inner, cut_outer, clearance, shape)
         else:
@@ -359,6 +373,7 @@ class RingGeneratorApp:
             "cut_inner": cut_inner,
             "cut_outer": cut_outer,
             "notch": notch,
+            "trapezoid_height": trapezoid_height,
             "shape": shape,
             "mode": mode,
             "split_paths": self.split_paths_var.get(),
@@ -390,11 +405,12 @@ class RingGeneratorApp:
             source_label = "自动" if self.auto_notch_var.get() else "手动"
             if values["shape"] == "trapezoid":
                 base_width = wall * float(values["notch"]) / 100.0
-                web = wall - 1.58 * TRAPEZOID_NOTCH_HEIGHT
+                trapezoid_height = float(values["trapezoid_height"])
+                web = wall - 1.58 * trapezoid_height
                 self.geometry_var.set(
                     f"实际切割环宽：{format_value(wall)} mm；"
                     f"{source_label}{shape_label}下底：{format_value(values['notch'])}% "
-                    f"（{format_value(base_width)} mm）；高度固定 8 mm；"
+                    f"（{format_value(base_width)} mm）；高度：{format_value(trapezoid_height)} mm；"
                     f"估算连续材料：{format_value(web)} mm"
                 )
             else:
@@ -431,6 +447,7 @@ class RingGeneratorApp:
             notch_size=float(values["notch"]),
             clearance=float(values["clearance"]),
             notch_shape=str(values["shape"]),
+            trapezoid_height=float(values["trapezoid_height"]),
         )
 
         def point(point_value: tuple[float, float], rotation: float = 0.0) -> tuple[float, float]:
@@ -491,6 +508,7 @@ class RingGeneratorApp:
                 "notch_size": values["notch"],
                 "clearance": values["clearance"],
                 "notch_shape": values["shape"],
+                "trapezoid_height": values["trapezoid_height"],
                 "split_paths": values["split_paths"],
             }
             if values["mode"] == "individual":
