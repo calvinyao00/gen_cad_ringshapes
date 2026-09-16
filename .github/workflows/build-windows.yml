@@ -42,3 +42,39 @@ jobs:
           name: 环形拼接件生成器-windows
           path: dist/环形拼接件生成器
           if-no-files-found: error
+
+  build-windows7:
+    runs-on: windows-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Windows 7 兼容版 Python
+        uses: actions/setup-python@v5
+        with:
+          # Python 3.8.10 is the last regular Python release for Windows 7.
+          python-version: "3.8.10"
+          # A 32-bit build runs on both 32-bit and 64-bit Windows 7.
+          architecture: "x86"
+
+      - name: 安装 Windows 7 兼容版 PyInstaller
+        run: python -m pip install "pyinstaller==5.13.2"
+
+      - name: 构建 Windows 7 EXE
+        run: >-
+          python -m PyInstaller
+          --clean
+          --noconfirm
+          --onedir
+          --windowed
+          --noupx
+          --name "环形拼接件生成器"
+          ring_generator_gui.py
+
+      - name: 上传 Windows 7 构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: 环形拼接件生成器-windows7
+          path: dist/环形拼接件生成器
+          if-no-files-found: error
