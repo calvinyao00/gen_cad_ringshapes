@@ -7,6 +7,8 @@ Windows 使用方法：
 2. 安装时勾选 “Add python.exe to PATH”。
 3. 双击运行 `运行环形生成器.bat`。程序会打开中文桌面窗口。
 
+如果在 Windows 7 上运行构建版 EXE，请使用专门的 Windows 7 兼容构建。该构建使用 Python 3.8.10 32 位，避免 Python 3.9 以后依赖的 `api-ms-win-core-path-l1-1-0.dll`。目标电脑建议为 Windows 7 SP1，并安装系统更新。
+
 本程序使用 Tkinter 桌面界面，只使用 Python 标准库，不需要安装 pip 第三方包。
 关闭窗口即可退出程序，不会留下本地浏览器服务器进程。
 

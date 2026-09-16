@@ -655,9 +655,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--split-paths",
-        action=argparse.BooleanOptionalAction,
+        dest="split_paths",
+        action="store_true",
         default=DEFAULT_SPLIT_PATHS,
         help="write separate outer and inner cutting paths (default: enabled)",
+    )
+    parser.add_argument(
+        "--no-split-paths",
+        dest="split_paths",
+        action="store_false",
+        help="use legacy separate ARC and LINE entities",
     )
     return parser
 

@@ -10,10 +10,12 @@
 2. 打开仓库的 **Actions** 页面。
 3. 选择 **构建 Windows EXE**。
 4. 点击 **Run workflow**，或推送到 `main` / `master` 分支。
-5. 工作流完成后，在运行页面底部下载 `环形拼接件生成器-windows`。
+5. 工作流完成后，在运行页面底部下载 `环形拼接件生成器-windows7`。
 6. 解压 ZIP，双击 `环形拼接件生成器.exe`。
 
 目标 Windows 电脑不需要 Python、pip 或浏览器。
+Windows 构建使用 Python 3.8.10 32 位和固定版 PyInstaller，兼容目标为 Windows 7 SP1 及更新版本；32 位程序可以运行在 32 位和 64 位 Windows 7 上。
+Windows 7 已停止官方安全支持，建议仅在无法升级的离线设备上使用。
 默认 DXF 输出到 EXE 同级的 `输出` 文件夹，不会写入 PyInstaller 的 `_internal` 文件夹。
 关闭 Tkinter 窗口后，EXE 会自动退出；再次双击不会创建重复实例。
 
