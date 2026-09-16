@@ -26,10 +26,12 @@ import argparse
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Sequence, Tuple
 
 
-Point = tuple[float, float]
+# Use typing.Tuple here because this assignment is evaluated at import time;
+# built-in generic aliases such as tuple[float, float] require Python 3.9+.
+Point = Tuple[float, float]
 
 
 SOURCE_INNER_RADIUS = 101.5
