@@ -12,17 +12,16 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from generate_ring import (
+    DEFAULT_CONNECTOR_CORNER_RADIUS,
     DEFAULT_LASER_CLEARANCE,
-    DEFAULT_NOTCH_PERCENTAGE,
-    DEFAULT_NOTCH_SHAPE,
-    DEFAULT_TRAPEZOID_HEIGHT,
-    TRAPEZOID_TOP_BASE_RATIO,
-    NOTCH_SHAPE_LABELS,
-    automatic_notch_value,
+    DEFAULT_MALE_HEIGHT,
+    DEFAULT_MALE_LOWER_BASE_WIDTH,
+    DEFAULT_MALE_TOP_BASE_WIDTH,
     compensated_radii,
     generate_dxf,
     generate_piece_dxf,
     ring_layout_filename,
+    rounded_connector_path,
     resized_piece,
     rotate,
     single_piece_filename,
@@ -97,7 +96,7 @@ class RingGeneratorApp:
     def __init__(self, root: tk.Tk, instance: SingleInstance) -> None:
         self.root = root
         self.instance = instance
-        self.root.title("环形拼接件 DXF 生成器")
+        self.root.title("塑料护盒拼接件 DXF 生成器")
         self.root.geometry("1160x780")
         self.root.minsize(980, 680)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
@@ -111,10 +110,9 @@ class RingGeneratorApp:
         self.outer_var = tk.StringVar(value="262")
         self.plate_var = tk.StringVar(value="0")
         self.parts_var = tk.StringVar(value="4")
-        self.shape_var = tk.StringVar(value=NOTCH_SHAPE_LABELS[DEFAULT_NOTCH_SHAPE])
-        self.auto_notch_var = tk.BooleanVar(value=True)
-        self.notch_var = tk.StringVar(value=format_value(DEFAULT_NOTCH_PERCENTAGE))
-        self.trapezoid_height_var = tk.StringVar(value=format_value(DEFAULT_TRAPEZOID_HEIGHT))
+        self.male_lower_base_var = tk.StringVar(value=format_value(DEFAULT_MALE_LOWER_BASE_WIDTH))
+        self.male_top_base_var = tk.StringVar(value=format_value(DEFAULT_MALE_TOP_BASE_WIDTH))
+        self.male_height_var = tk.StringVar(value=format_value(DEFAULT_MALE_HEIGHT))
         self.clearance_var = tk.StringVar(value=format_value(DEFAULT_LASER_CLEARANCE))
         self.output_dir_var = tk.StringVar(value=str(default_output_directory()))
         self.output_mode_var = tk.StringVar(value="单个零件模板（推荐排版）")
@@ -125,8 +123,6 @@ class RingGeneratorApp:
         self._updating_preview = False
 
         self.build_ui()
-        self.update_notch_label()
-        self.update_notch_state()
         self.update_preview()
 
     def build_ui(self) -> None:
@@ -141,13 +137,13 @@ class RingGeneratorApp:
         preview_panel.columnconfigure(0, weight=1)
         preview_panel.rowconfigure(1, weight=1)
 
-        title = ttk.Label(controls, text="环形参数", font=("Microsoft YaHei UI", 16, "bold"))
+        title = ttk.Label(controls, text="塑料护盒参数", font=("Microsoft YaHei UI", 16, "bold"))
         title.grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 14))
 
         row = 1
-        row = self.add_entry(controls, row, "内径（毫米）", self.inner_var)
-        row = self.add_entry(controls, row, "外径（毫米）", self.outer_var)
-        row = self.add_entry(controls, row, "板厚（毫米）", self.plate_var)
+        row = self.add_length_spinbox(controls, row, "内径（毫米）", self.inner_var)
+        row = self.add_length_spinbox(controls, row, "外径（毫米）", self.outer_var)
+        row = self.add_length_spinbox(controls, row, "板厚（毫米）", self.plate_var)
         ttk.Label(
             controls,
             text="切割内径=输入内径+2×板厚；切割外径=输入外径−2×板厚",
@@ -155,42 +151,20 @@ class RingGeneratorApp:
             foreground="#59636e",
         ).grid(row=row, column=0, columnspan=3, sticky="w", pady=(0, 10))
         row += 1
-        row = self.add_entry(controls, row, "零件数量", self.parts_var)
+        row = self.add_integer_spinbox(controls, row, "零件数量", self.parts_var)
 
-        ttk.Label(controls, text="缺口形状").grid(row=row, column=0, sticky="w", pady=5)
-        self.shape_box = ttk.Combobox(
-            controls,
-            textvariable=self.shape_var,
-            values=["梯形", "矩形"],
-            state="readonly",
-            width=25,
+        ttk.Label(controls, text="梯形公头连接", font=("Microsoft YaHei UI", 13, "bold")).grid(
+            row=row, column=0, columnspan=3, sticky="w", pady=(8, 4)
         )
-        self.shape_box.grid(row=row, column=1, columnspan=2, sticky="ew", pady=5)
-        self.shape_box.bind("<<ComboboxSelected>>", self.shape_changed)
         row += 1
-
-        self.auto_check = ttk.Checkbutton(
-            controls,
-            text="根据环宽自动设计缺口（比例 25%）",
-            variable=self.auto_notch_var,
-            command=self.update_notch_state,
-        )
-        self.auto_check.grid(row=row, column=0, columnspan=3, sticky="w", pady=(8, 3))
-        row += 1
-        notch_row = row
-        row = self.add_entry(controls, row, "梯形咬合下底占环宽（%）", self.notch_var)
-        self.notch_label = controls.grid_slaves(row=notch_row, column=0)[0]
-        self.notch_entry = controls.grid_slaves(row=notch_row, column=1)[0]
-        trapezoid_height_row = row
-        row = self.add_entry(controls, row, "梯形高度（毫米）", self.trapezoid_height_var)
-        self.trapezoid_height_entry = controls.grid_slaves(
-            row=trapezoid_height_row, column=1
-        )[0]
-        row = self.add_entry(controls, row, "激光间隙（毫米）", self.clearance_var)
+        row = self.add_length_spinbox(controls, row, "公头下底宽度（毫米）", self.male_lower_base_var)
+        row = self.add_length_spinbox(controls, row, "公头上底宽度（毫米）", self.male_top_base_var)
+        row = self.add_length_spinbox(controls, row, "公头伸出高度（毫米）", self.male_height_var)
+        row = self.add_length_spinbox(controls, row, "激光间隙（毫米）", self.clearance_var)
 
         ttk.Label(
             controls,
-            text="下底比例只改变沿环宽方向的下底长度；梯形高度单独控制切向高度，默认 8 mm。",
+            text=f"公头三边均可按 0.1 mm 调整；四个梯形转角固定为 R{format_value(DEFAULT_CONNECTOR_CORNER_RADIUS)} mm。",
             wraplength=330,
             foreground="#59636e",
         ).grid(row=row, column=0, columnspan=3, sticky="w", pady=(0, 12))
@@ -280,39 +254,38 @@ class RingGeneratorApp:
             self.outer_var,
             self.plate_var,
             self.parts_var,
-            self.notch_var,
-            self.trapezoid_height_var,
+            self.male_lower_base_var,
+            self.male_top_base_var,
+            self.male_height_var,
             self.clearance_var,
         ):
             variable.trace_add("write", lambda *_args: self.update_preview())
 
-    def add_entry(self, parent: ttk.Frame, row: int, label: str, variable: tk.StringVar) -> int:
+    def add_length_spinbox(
+        self, parent: ttk.Frame, row: int, label: str, variable: tk.StringVar
+    ) -> int:
         ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", pady=5)
-        ttk.Entry(parent, textvariable=variable, width=27).grid(
+        ttk.Spinbox(
+            parent,
+            textvariable=variable,
+            from_=0.0,
+            to=100000.0,
+            increment=0.1,
+            format="%.1f",
+            width=25,
+        ).grid(
             row=row, column=1, columnspan=2, sticky="ew", pady=5
         )
         return row + 1
 
-    def update_notch_state(self) -> None:
-        if hasattr(self, "notch_entry"):
-            self.notch_entry.configure(state="disabled" if self.auto_notch_var.get() else "normal")
-        if hasattr(self, "trapezoid_height_entry"):
-            self.trapezoid_height_entry.configure(
-                state="normal" if self.shape_var.get() == "梯形" else "disabled"
-            )
-        self.update_preview()
-
-    def update_notch_label(self) -> None:
-        if not hasattr(self, "notch_label"):
-            return
-        if self.shape_var.get() == "梯形":
-            self.notch_label.configure(text="梯形咬合下底占环宽（%）")
-        else:
-            self.notch_label.configure(text="矩形缺口高度（毫米）")
-
-    def shape_changed(self, _event=None) -> None:
-        self.update_notch_label()
-        self.update_notch_state()
+    def add_integer_spinbox(
+        self, parent: ttk.Frame, row: int, label: str, variable: tk.StringVar
+    ) -> int:
+        ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", pady=5)
+        ttk.Spinbox(parent, textvariable=variable, from_=2, to=360, increment=1, width=25).grid(
+            row=row, column=1, columnspan=2, sticky="ew", pady=5
+        )
+        return row + 1
 
     def choose_output_directory(self) -> None:
         current = Path(self.output_dir_var.get()).expanduser()
@@ -331,11 +304,21 @@ class RingGeneratorApp:
                 raise ValueError(f"{label}必须是有效数字")
             return value
 
-        inner = number(self.inner_var, "内径")
-        outer = number(self.outer_var, "外径")
-        plate = number(self.plate_var, "板厚")
+        def tenth_mm(variable: tk.StringVar, label: str) -> float:
+            value = number(variable, label)
+            rounded = round(value * 10.0) / 10.0
+            if not math.isclose(value, rounded, abs_tol=1e-8):
+                raise ValueError(f"{label}必须按 0.1 mm 递增")
+            return rounded
+
+        inner = tenth_mm(self.inner_var, "内径")
+        outer = tenth_mm(self.outer_var, "外径")
+        plate = tenth_mm(self.plate_var, "板厚")
         parts_value = number(self.parts_var, "零件数量")
-        clearance = number(self.clearance_var, "激光间隙")
+        clearance = tenth_mm(self.clearance_var, "激光间隙")
+        male_lower_base = tenth_mm(self.male_lower_base_var, "公头下底宽度")
+        male_top_base = tenth_mm(self.male_top_base_var, "公头上底宽度")
+        male_height = tenth_mm(self.male_height_var, "公头伸出高度")
         if inner <= 0:
             raise ValueError("内径必须大于 0")
         if outer <= inner:
@@ -346,24 +329,19 @@ class RingGeneratorApp:
             raise ValueError("零件数量必须是大于等于 2 的整数")
         if clearance < 0:
             raise ValueError("激光间隙不能为负数")
+        if male_lower_base <= 0:
+            raise ValueError("公头下底宽度必须大于 0")
+        if male_top_base <= 0 or male_top_base > male_lower_base:
+            raise ValueError("公头上底宽度必须大于 0 且不超过公头下底宽度")
+        if male_height <= 0:
+            raise ValueError("公头伸出高度必须大于 0")
 
         parts = int(parts_value)
         cut_inner, cut_outer = compensated_radii(inner / 2.0, outer / 2.0, plate)
-        shape = "trapezoid" if self.shape_var.get() == "梯形" else "rectangular"
-        trapezoid_height = number(self.trapezoid_height_var, "梯形高度")
-        if shape == "trapezoid" and trapezoid_height <= 0:
-            raise ValueError("梯形高度必须大于 0")
-        if self.auto_notch_var.get():
-            notch = automatic_notch_value(cut_inner, cut_outer, clearance, shape)
-        else:
-            if shape == "trapezoid":
-                notch = number(self.notch_var, "梯形咬合下底比例")
-                if notch <= 0 or notch > 100:
-                    raise ValueError("梯形咬合下底比例必须大于 0 且不超过 100%")
-            else:
-                notch = number(self.notch_var, "矩形缺口高度")
-                if notch <= 0:
-                    raise ValueError("矩形缺口高度必须大于 0")
+        wall = cut_outer - cut_inner
+        if male_lower_base > wall:
+            raise ValueError("公头下底宽度不能超过补偿后的切割环宽")
+        shape = "trapezoid"
         mode = "individual" if self.output_mode_var.get().startswith("单个") else "ring"
         return {
             "inner": inner,
@@ -373,8 +351,12 @@ class RingGeneratorApp:
             "clearance": clearance,
             "cut_inner": cut_inner,
             "cut_outer": cut_outer,
-            "notch": notch,
-            "trapezoid_height": trapezoid_height,
+            # The filename intentionally ignores connector parameters.  Keep
+            # this compatibility value for the existing filename helpers.
+            "notch": male_lower_base,
+            "male_lower_base": male_lower_base,
+            "male_top_base": male_top_base,
+            "male_height": male_height,
             "shape": shape,
             "mode": mode,
             "split_paths": self.split_paths_var.get(),
@@ -398,30 +380,17 @@ class RingGeneratorApp:
         self._updating_preview = True
         try:
             values = self.values()
-            if self.auto_notch_var.get():
-                self.notch_var.set(format_value(values["notch"]))
             self.filename_var.set(self.filename_for(values))
             wall = values["cut_outer"] - values["cut_inner"]
-            shape_label = NOTCH_SHAPE_LABELS[values["shape"]]
-            source_label = "自动" if self.auto_notch_var.get() else "手动"
-            if values["shape"] == "trapezoid":
-                base_width = wall * float(values["notch"]) / 100.0
-                trapezoid_height = float(values["trapezoid_height"])
-                top_base_width = base_width * TRAPEZOID_TOP_BASE_RATIO
-                material_each_side = (wall - top_base_width) / 2.0
-                self.geometry_var.set(
-                    f"实际切割环宽：{format_value(wall)} mm；"
-                    f"{source_label}{shape_label}下底：{format_value(values['notch'])}% "
-                    f"（{format_value(base_width)} mm）；高度：{format_value(trapezoid_height)} mm；"
-                    f"两侧材料：各 {format_value(material_each_side)} mm"
-                )
-            else:
-                web = wall - 2.0 * float(values["notch"])
-                self.geometry_var.set(
-                    f"实际切割环宽：{format_value(wall)} mm；"
-                    f"{source_label}{shape_label}高度：{format_value(values['notch'])} mm；"
-                    f"估算连续材料：{format_value(web)} mm"
-                )
+            material_each_side = (wall - float(values["male_lower_base"])) / 2.0
+            self.geometry_var.set(
+                f"实际切割环宽：{format_value(wall)} mm；"
+                f"公头下底：{format_value(values['male_lower_base'])} mm；"
+                f"上底：{format_value(values['male_top_base'])} mm；"
+                f"伸出：{format_value(values['male_height'])} mm；"
+                f"R{format_value(DEFAULT_CONNECTOR_CORNER_RADIUS)}；"
+                f"两侧材料：各 {format_value(material_each_side)} mm"
+            )
             self.status_var.set("就绪")
             self.draw_preview(values)
         except (OSError, ValueError, TypeError) as exc:
@@ -449,37 +418,71 @@ class RingGeneratorApp:
             notch_size=float(values["notch"]),
             clearance=float(values["clearance"]),
             notch_shape=str(values["shape"]),
-            trapezoid_height=float(values["trapezoid_height"]),
+            male_lower_base_width=float(values["male_lower_base"]),
+            male_top_base_width=float(values["male_top_base"]),
+            male_height=float(values["male_height"]),
         )
 
         def point(point_value: tuple[float, float], rotation: float = 0.0) -> tuple[float, float]:
             x, y = rotate(point_value, rotation)
             return cx + x * scale, cy - y * scale
 
-        def arc_points(radius: float, start: float, end: float) -> list[float]:
-            count = max(16, int(abs(end - start) / 3.0))
-            points: list[float] = []
-            for index in range(count + 1):
-                angle = math.radians(start + (end - start) * index / count)
-                points.extend(
-                    (cx + radius * math.cos(angle) * scale, cy - radius * math.sin(angle) * scale)
+        def bulge_points(start: tuple[float, float], end: tuple[float, float], bulge: float) -> list[tuple[float, float]]:
+            if abs(bulge) <= 1e-10:
+                return [start, end]
+            dx, dy = end[0] - start[0], end[1] - start[1]
+            chord = math.hypot(dx, dy)
+            midpoint = ((start[0] + end[0]) / 2.0, (start[1] + end[1]) / 2.0)
+            left_normal = (-dy / chord, dx / chord)
+            offset = chord * (1.0 - bulge * bulge) / (4.0 * bulge)
+            arc_center = (
+                midpoint[0] + left_normal[0] * offset,
+                midpoint[1] + left_normal[1] * offset,
+            )
+            radius = chord * (1.0 + bulge * bulge) / (4.0 * abs(bulge))
+            start_angle = math.atan2(start[1] - arc_center[1], start[0] - arc_center[0])
+            sweep = 4.0 * math.atan(bulge)
+            count = max(6, int(abs(math.degrees(sweep)) / 3.0))
+            return [
+                (
+                    arc_center[0] + radius * math.cos(start_angle + sweep * index / count),
+                    arc_center[1] + radius * math.sin(start_angle + sweep * index / count),
                 )
-            return points
+                for index in range(count + 1)
+            ]
+
+        def draw_path(
+            vertices: tuple[tuple[float, float], ...],
+            bulges: tuple[float, ...],
+            ring_colour: str,
+        ) -> None:
+            for index, (start, end, bulge) in enumerate(zip(vertices, vertices[1:], bulges)):
+                points = bulge_points(start, end, bulge)
+                canvas.create_line(
+                    *(coordinate for point_value in points for coordinate in point(point_value)),
+                    fill=ring_colour if index == 0 else "#f0a35b",
+                    width=2,
+                )
 
         for index in range(int(values["parts"])):
             rotation = index * sector
-            start_angle = 180.0 - sector / 2.0 + rotation
-            end_angle = 180.0 + sector / 2.0 + rotation
-            canvas.create_line(*arc_points(outer_radius, start_angle, end_angle), fill="#e8edf2", width=2)
-            canvas.create_line(*arc_points(inner_radius, start_angle, end_angle), fill="#a9b4bf", width=2)
-            for edge in (piece.start_edge, piece.end_edge):
-                for start, end in zip(edge, edge[1:]):
-                    canvas.create_line(
-                        *point(start, rotation),
-                        *point(end, rotation),
-                        fill="#f0a35b",
-                        width=2,
-                    )
+            arc_bulge = math.tan(math.radians(sector) / 4.0)
+            outer_path, outer_bulges = rounded_connector_path(
+                [rotate(piece.outer_start, rotation)]
+                + [rotate(point_value, rotation) for point_value in piece.end_edge],
+                [arc_bulge] + [0.0] * len(piece.end_edge),
+                "trapezoid",
+                DEFAULT_CONNECTOR_CORNER_RADIUS,
+            )
+            inner_path, inner_bulges = rounded_connector_path(
+                [rotate(piece.inner_end, rotation)]
+                + [rotate(point_value, rotation) for point_value in reversed(piece.start_edge)],
+                [-arc_bulge] + [0.0] * len(piece.start_edge),
+                "trapezoid",
+                DEFAULT_CONNECTOR_CORNER_RADIUS,
+            )
+            draw_path(outer_path, outer_bulges, "#e8edf2")
+            draw_path(inner_path, inner_bulges, "#a9b4bf")
 
         canvas.create_text(
             14,
@@ -510,7 +513,10 @@ class RingGeneratorApp:
                 "notch_size": values["notch"],
                 "clearance": values["clearance"],
                 "notch_shape": values["shape"],
-                "trapezoid_height": values["trapezoid_height"],
+                "male_lower_base_width": values["male_lower_base"],
+                "male_top_base_width": values["male_top_base"],
+                "male_height": values["male_height"],
+                "connector_corner_radius": DEFAULT_CONNECTOR_CORNER_RADIUS,
                 "split_paths": values["split_paths"],
             }
             if values["mode"] == "individual":

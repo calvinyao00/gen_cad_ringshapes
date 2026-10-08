@@ -7,13 +7,12 @@ The default geometry is measured from the supplied DXF file:
 
 The source sector is a 90-degree annular sector with an outer radius of 131
 mm and an inner radius of 101.5 mm.  Its two ends use slightly different
-keyed profiles. The number of parts, notch control, and laser clearance are
-configurable, as is the notch shape (trapezoid or rectangular); when the
-number of parts is not four, the profile is angularly resized so all parts
-still close into one ring. For a trapezoid, the height defaults to 8 mm and
-is independently adjustable; the lower-base width is controlled as a
-percentage of the compensated radial ring wall. For a rectangle, the control
-remains the notch height in mm.
+keyed profiles. The number of parts, connector dimensions, and laser
+clearance are configurable; when the number of parts is not four, the profile
+is angularly resized so all parts still close into one ring.  The plastic-box
+connector is a trapezoidal male tab with independently adjustable lower base,
+upper base, and protrusion height.  Its four corners are filleted at R2 mm by
+default.
 
 By default the writer emits two open R12 POLYLINE paths. Each path contains
 one exact circular-arc bulge and one keyed side, so a laser cutter can run
@@ -41,8 +40,8 @@ SOURCE_START_ANGLE = 135.0
 SOURCE_END_ANGLE = 225.0
 SOURCE_CENTER_ANGLE = 180.0
 SOURCE_SECTOR_ANGLE = SOURCE_END_ANGLE - SOURCE_START_ANGLE
-# Rectangular-notch height, in millimeters. Trapezoids use a separate height
-# control (8 mm by default) and control their lower-base width by percentage.
+# Legacy controls are kept for scripts made before the plastic-box connector
+# update.  New callers should use the explicit male_* dimensions below.
 DEFAULT_NOTCH_SIZE = 10.0
 DEFAULT_NOTCH_PERCENTAGE = 25.0
 DEFAULT_TRAPEZOID_HEIGHT = 8.0
@@ -52,6 +51,12 @@ TRAPEZOID_TOP_BASE_RATIO = 0.70
 # Backward-compatible name retained for callers that imported the old
 # constant. It now represents the default, rather than a forced height.
 TRAPEZOID_NOTCH_HEIGHT = DEFAULT_TRAPEZOID_HEIGHT
+# Defaults reproduce the former 25% / 70% geometry for the original 29.5 mm
+# ring wall, rounded to the 0.1 mm adjustment grid used by the desktop GUI.
+DEFAULT_MALE_LOWER_BASE_WIDTH = 7.4
+DEFAULT_MALE_TOP_BASE_WIDTH = 5.2
+DEFAULT_MALE_HEIGHT = 8.0
+DEFAULT_CONNECTOR_CORNER_RADIUS = 2.0
 DEFAULT_LASER_CLEARANCE = 0.3
 DEFAULT_NOTCH_SHAPE = "trapezoid"
 NOTCH_SHAPES = ("trapezoid", "rectangular")
@@ -122,15 +127,16 @@ def resized_piece(
     clearance: float = DEFAULT_LASER_CLEARANCE,
     notch_shape: str = DEFAULT_NOTCH_SHAPE,
     trapezoid_height: float = DEFAULT_TRAPEZOID_HEIGHT,
+    male_lower_base_width: float | None = None,
+    male_top_base_width: float | None = None,
+    male_height: float | None = None,
 ) -> PieceGeometry:
     """Build one sector with adjustable notch size and mating clearance.
 
     The source end profile, expressed in radial/tangential coordinates, is:
 
-    * trapezoid lower-base width, measured along the radial ring wall, as a
-      percentage of that wall;
-    * independently adjustable trapezoid height, measured in the tangential
-      direction between its two bases;
+    * trapezoid lower and upper base widths, measured along the radial ring
+      wall, plus a male-tab protrusion height measured tangentially;
     * equal radial steps for a rectangular notch, with the notch height in
       millimeters;
     * a tangential key width derived from the selected control;
@@ -154,16 +160,28 @@ def resized_piece(
 
     wall = outer_radius - inner_radius
     if notch_shape == "trapezoid":
-        notch_percentage = (
-            DEFAULT_NOTCH_PERCENTAGE if notch_size is None else notch_size
-        )
-        if notch_percentage <= 0 or notch_percentage > 100:
-            raise ValueError("梯形咬合下底比例必须大于 0 且不超过 100%")
-        if trapezoid_height <= 0:
-            raise ValueError("梯形高度必须大于 0")
-        notch_height = trapezoid_height
-        lower_base_width = wall * notch_percentage / 100.0
-        upper_base_width = lower_base_width * TRAPEZOID_TOP_BASE_RATIO
+        # ``notch_size`` remains a legacy percentage when explicit dimensions
+        # are absent.  This lets earlier command-line scripts keep working.
+        if male_lower_base_width is None:
+            notch_percentage = (
+                DEFAULT_NOTCH_PERCENTAGE if notch_size is None else notch_size
+            )
+            if notch_percentage <= 0 or notch_percentage > 100:
+                raise ValueError("梯形咬合下底比例必须大于 0 且不超过 100%")
+            lower_base_width = wall * notch_percentage / 100.0
+        else:
+            lower_base_width = male_lower_base_width
+        if male_top_base_width is None:
+            upper_base_width = lower_base_width * TRAPEZOID_TOP_BASE_RATIO
+        else:
+            upper_base_width = male_top_base_width
+        notch_height = trapezoid_height if male_height is None else male_height
+        if lower_base_width <= 0 or lower_base_width > wall:
+            raise ValueError("公头下底宽度必须大于 0 且不超过切割环宽")
+        if upper_base_width <= 0 or upper_base_width > lower_base_width:
+            raise ValueError("公头上底宽度必须大于 0 且不超过公头下底宽度")
+        if notch_height <= 0:
+            raise ValueError("公头伸出高度必须大于 0")
         base_center = (outer_radius + inner_radius) / 2.0
         radial_values = (
             outer_radius,
@@ -425,6 +443,33 @@ class DxfWriter:
         self.pair(50, fmt(start_angle % 360.0))
         self.pair(51, fmt(end_angle % 360.0))
 
+    def bulge_arc(self, start: Point, end: Point, bulge: float) -> None:
+        """Write the circular arc represented by one polyline bulge."""
+
+        if not bulge:
+            self.line(start, end)
+            return
+        dx = end[0] - start[0]
+        dy = end[1] - start[1]
+        chord = math.hypot(dx, dy)
+        if chord <= 1e-9:
+            raise ValueError("圆角弧的端点不能重合")
+        midpoint = ((start[0] + end[0]) / 2.0, (start[1] + end[1]) / 2.0)
+        left_normal = (-dy / chord, dx / chord)
+        offset = chord * (1.0 - bulge * bulge) / (4.0 * bulge)
+        center = (
+            midpoint[0] + left_normal[0] * offset,
+            midpoint[1] + left_normal[1] * offset,
+        )
+        radius = chord * (1.0 + bulge * bulge) / (4.0 * abs(bulge))
+        start_angle = math.degrees(math.atan2(start[1] - center[1], start[0] - center[0]))
+        end_angle = math.degrees(math.atan2(end[1] - center[1], end[0] - center[0]))
+        # DXF ARC entities are always counter-clockwise.  Reverse the two
+        # angles for a clockwise bulge; the geometry remains identical.
+        if bulge < 0:
+            start_angle, end_angle = end_angle, start_angle
+        self.arc(center, radius, start_angle, end_angle)
+
     def line(self, start: Point, end: Point) -> None:
         self.pair(0, "LINE")
         self.pair(8, "0")
@@ -471,6 +516,124 @@ class DxfWriter:
         return "\r\n".join(self.lines) + "\r\n"
 
 
+@dataclass(frozen=True)
+class Fillet:
+    """Tangent points and bulge for one rounded polyline corner."""
+
+    before: Point
+    after: Point
+    bulge: float
+    tangent_length: float
+
+
+def _fillet_at_corner(previous: Point, corner: Point, following: Point, radius: float) -> Fillet:
+    """Return an exact constant-radius fillet for a directed polyline corner."""
+
+    incoming_length = math.dist(previous, corner)
+    outgoing_length = math.dist(corner, following)
+    if incoming_length <= 1e-9 or outgoing_length <= 1e-9:
+        raise ValueError("梯形圆角附近的边长不能为零")
+    incoming = (
+        (corner[0] - previous[0]) / incoming_length,
+        (corner[1] - previous[1]) / incoming_length,
+    )
+    outgoing = (
+        (following[0] - corner[0]) / outgoing_length,
+        (following[1] - corner[1]) / outgoing_length,
+    )
+    turn = math.atan2(
+        incoming[0] * outgoing[1] - incoming[1] * outgoing[0],
+        incoming[0] * outgoing[0] + incoming[1] * outgoing[1],
+    )
+    if abs(turn) <= 1e-7 or abs(abs(turn) - math.pi) <= 1e-7:
+        raise ValueError("梯形圆角需要两个不共线的相邻边")
+    tangent_length = radius * math.tan(abs(turn) / 2.0)
+    return Fillet(
+        before=(
+            corner[0] - incoming[0] * tangent_length,
+            corner[1] - incoming[1] * tangent_length,
+        ),
+        after=(
+            corner[0] + outgoing[0] * tangent_length,
+            corner[1] + outgoing[1] * tangent_length,
+        ),
+        bulge=math.tan(turn / 4.0),
+        tangent_length=tangent_length,
+    )
+
+
+def fillet_polyline(
+    vertices: Sequence[Point],
+    bulges: Sequence[float],
+    corner_indices: Sequence[int],
+    radius: float,
+) -> tuple[tuple[Point, ...], tuple[float, ...]]:
+    """Round selected corners while preserving every existing arc segment.
+
+    DXF stores a round polyline corner as an arc bulge on its incoming tangent
+    point.  This works for both cutting-path polylines and the on-screen
+    preview without approximating the requested radius.
+    """
+
+    if len(vertices) != len(bulges) or len(vertices) < 2:
+        raise ValueError("圆角路径的点和弧度数量必须一致")
+    if radius < 0:
+        raise ValueError("梯形圆角半径不能为负数")
+    if radius == 0:
+        return tuple(vertices), tuple(bulges)
+
+    selected = set(corner_indices)
+    if any(index <= 0 or index >= len(vertices) - 1 for index in selected):
+        raise ValueError("梯形圆角位置无效")
+    fillets = {
+        index: _fillet_at_corner(
+            vertices[index - 1], vertices[index], vertices[index + 1], radius
+        )
+        for index in selected
+    }
+    for index in range(len(vertices) - 1):
+        outgoing = fillets[index].tangent_length if index in fillets else 0.0
+        incoming = fillets[index + 1].tangent_length if index + 1 in fillets else 0.0
+        if outgoing + incoming >= math.dist(vertices[index], vertices[index + 1]) - 1e-8:
+            raise ValueError("R2 圆角对于当前公头尺寸过大，请增大尺寸或减小圆角")
+
+    rounded_vertices: list[Point] = []
+    rounded_bulges: list[float] = []
+    for index, vertex in enumerate(vertices):
+        if index in fillets:
+            fillet = fillets[index]
+            rounded_vertices.extend((fillet.before, fillet.after))
+            rounded_bulges.extend((fillet.bulge, bulges[index]))
+        else:
+            rounded_vertices.append(vertex)
+            rounded_bulges.append(bulges[index])
+    return tuple(rounded_vertices), tuple(rounded_bulges)
+
+
+def rounded_connector_path(
+    vertices: Sequence[Point],
+    bulges: Sequence[float],
+    notch_shape: str,
+    corner_radius: float,
+) -> tuple[tuple[Point, ...], tuple[float, ...]]:
+    """Apply the R2 fillets to the four trapezoid corners of one connector."""
+
+    if notch_shape != "trapezoid":
+        return tuple(vertices), tuple(bulges)
+    # The first two points define the circular ring arc.  The next four
+    # internal points are the trapezoid's four sharp corners.
+    return fillet_polyline(vertices, bulges, (2, 3, 4, 5), corner_radius)
+
+
+def write_bulge_path_as_entities(
+    writer: DxfWriter, vertices: Sequence[Point], bulges: Sequence[float]
+) -> None:
+    """Write a bulged path as traditional LINE/ARC entities."""
+
+    for start, end, bulge in zip(vertices, vertices[1:], bulges):
+        writer.bulge_arc(start, end, bulge)
+
+
 def write_piece(
     writer: DxfWriter,
     piece: PieceGeometry,
@@ -478,11 +641,33 @@ def write_piece(
     rotation: float,
     sector_angle: float,
     split_paths: bool = False,
+    notch_shape: str = DEFAULT_NOTCH_SHAPE,
+    connector_corner_radius: float = DEFAULT_CONNECTOR_CORNER_RADIUS,
 ) -> None:
     """Write one rotated sector."""
 
     def transform(point: Point) -> Point:
         return add(rotate(point, rotation), center)
+
+    arc_bulge = math.tan(math.radians(sector_angle) / 4.0)
+    outer_vertices = [transform(piece.outer_start)] + [
+        transform(point) for point in piece.end_edge
+    ]
+    inner_vertices = [transform(piece.inner_end)] + [
+        transform(point) for point in reversed(piece.start_edge)
+    ]
+    outer_vertices, outer_bulges = rounded_connector_path(
+        outer_vertices,
+        [arc_bulge] + [0.0] * (len(outer_vertices) - 1),
+        notch_shape,
+        connector_corner_radius,
+    )
+    inner_vertices, inner_bulges = rounded_connector_path(
+        inner_vertices,
+        [-arc_bulge] + [0.0] * (len(inner_vertices) - 1),
+        notch_shape,
+        connector_corner_radius,
+    )
 
     if split_paths:
         # Make two independent, continuous open paths.  The outer path runs
@@ -490,47 +675,19 @@ def write_piece(
         # end of the inner wall.  The inner path runs back through the inner
         # arc and the start-side notch.  Together they describe the same
         # closed outline, while the cutter can process them separately.
-        arc_bulge = math.tan(math.radians(sector_angle) / 4.0)
-
-        outer_vertices = [transform(piece.outer_start)] + [
-            transform(point) for point in piece.end_edge
-        ]
         writer.comment("OUTER_CUT_PATH_BEGIN")
-        writer.polyline(
-            outer_vertices,
-            [arc_bulge] + [0.0] * (len(outer_vertices) - 1),
-        )
+        writer.polyline(outer_vertices, outer_bulges)
         writer.comment("OUTER_CUT_PATH_END")
 
-        inner_vertices = [transform(piece.inner_end)] + [
-            transform(point) for point in reversed(piece.start_edge)
-        ]
         writer.comment("INNER_CUT_PATH_BEGIN")
-        writer.polyline(
-            inner_vertices,
-            [-arc_bulge] + [0.0] * (len(inner_vertices) - 1),
-        )
+        writer.polyline(inner_vertices, inner_bulges)
         writer.comment("INNER_CUT_PATH_END")
         return
 
     # The legacy mode uses separate ARC and LINE entities, matching the
     # original source file.
-    writer.arc(
-        center,
-        polar_radius(piece.outer_start),
-        SOURCE_CENTER_ANGLE - sector_angle / 2.0 + rotation,
-        SOURCE_CENTER_ANGLE + sector_angle / 2.0 + rotation,
-    )
-    writer.arc(
-        center,
-        polar_radius(piece.inner_start),
-        SOURCE_CENTER_ANGLE - sector_angle / 2.0 + rotation,
-        SOURCE_CENTER_ANGLE + sector_angle / 2.0 + rotation,
-    )
-
-    for edge in (piece.start_edge, piece.end_edge):
-        for start, end in zip(edge, edge[1:]):
-            writer.line(transform(start), transform(end))
+    write_bulge_path_as_entities(writer, outer_vertices, outer_bulges)
+    write_bulge_path_as_entities(writer, inner_vertices, inner_bulges)
 
 
 def generate_piece_dxf(
@@ -544,6 +701,10 @@ def generate_piece_dxf(
     clearance: float = DEFAULT_LASER_CLEARANCE,
     notch_shape: str = DEFAULT_NOTCH_SHAPE,
     trapezoid_height: float = DEFAULT_TRAPEZOID_HEIGHT,
+    male_lower_base_width: float | None = None,
+    male_top_base_width: float | None = None,
+    male_height: float | None = None,
+    connector_corner_radius: float = DEFAULT_CONNECTOR_CORNER_RADIUS,
     plate_thickness: float = 0.0,
     rotation: float = 0.0,
     split_paths: bool = DEFAULT_SPLIT_PATHS,
@@ -571,12 +732,24 @@ def generate_piece_dxf(
         clearance=clearance,
         notch_shape=notch_shape,
         trapezoid_height=trapezoid_height,
+        male_lower_base_width=male_lower_base_width,
+        male_top_base_width=male_top_base_width,
+        male_height=male_height,
     )
     writer = DxfWriter()
     writer.header()
     # All individual files use the same local orientation. The nesting/CAD
     # program can rotate and place each copy wherever it fits on the plate.
-    write_piece(writer, piece, center, rotation, sector_angle, split_paths=split_paths)
+    write_piece(
+        writer,
+        piece,
+        center,
+        rotation,
+        sector_angle,
+        split_paths=split_paths,
+        notch_shape=notch_shape,
+        connector_corner_radius=connector_corner_radius,
+    )
     # Write bytes so Windows does not translate the already-formed CRLF
     # endings a second time into CRCRLF.
     output.write_bytes(writer.finish().encode("ascii"))
@@ -593,6 +766,10 @@ def generate_dxf(
     clearance: float = DEFAULT_LASER_CLEARANCE,
     notch_shape: str = DEFAULT_NOTCH_SHAPE,
     trapezoid_height: float = DEFAULT_TRAPEZOID_HEIGHT,
+    male_lower_base_width: float | None = None,
+    male_top_base_width: float | None = None,
+    male_height: float | None = None,
+    connector_corner_radius: float = DEFAULT_CONNECTOR_CORNER_RADIUS,
     plate_thickness: float = 0.0,
     rotation: float = 0.0,
     step: float | None = None,
@@ -623,6 +800,9 @@ def generate_dxf(
         clearance=clearance,
         notch_shape=notch_shape,
         trapezoid_height=trapezoid_height,
+        male_lower_base_width=male_lower_base_width,
+        male_top_base_width=male_top_base_width,
+        male_height=male_height,
     )
     writer = DxfWriter()
     writer.header()
@@ -634,6 +814,8 @@ def generate_dxf(
             rotation + index * step,
             step,
             split_paths=split_paths,
+            notch_shape=notch_shape,
+            connector_corner_radius=connector_corner_radius,
         )
     # Write bytes so Windows does not translate the already-formed CRLF
     # endings a second time into CRCRLF.
@@ -697,6 +879,30 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=DEFAULT_TRAPEZOID_HEIGHT,
         help=f"trapezoid height in mm (default: {DEFAULT_TRAPEZOID_HEIGHT})",
+    )
+    parser.add_argument(
+        "--male-lower-base-width",
+        type=float,
+        default=None,
+        help="male trapezoid lower-base width in mm; overrides --notch-size",
+    )
+    parser.add_argument(
+        "--male-top-base-width",
+        type=float,
+        default=None,
+        help="male trapezoid upper-base width in mm",
+    )
+    parser.add_argument(
+        "--male-height",
+        type=float,
+        default=None,
+        help="male trapezoid protrusion height in mm; overrides --trapezoid-height",
+    )
+    parser.add_argument(
+        "--connector-corner-radius",
+        type=float,
+        default=DEFAULT_CONNECTOR_CORNER_RADIUS,
+        help=f"trapezoid corner radius in mm (default: {DEFAULT_CONNECTOR_CORNER_RADIUS})",
     )
     parser.add_argument(
         "--clearance",
@@ -786,6 +992,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             clearance=args.clearance,
             notch_shape=args.notch_shape,
             trapezoid_height=args.trapezoid_height,
+            male_lower_base_width=args.male_lower_base_width,
+            male_top_base_width=args.male_top_base_width,
+            male_height=args.male_height,
+            connector_corner_radius=args.connector_corner_radius,
             plate_thickness=args.plate_thickness,
             rotation=args.rotation,
             step=args.step,
