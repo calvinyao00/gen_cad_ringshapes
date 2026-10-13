@@ -214,9 +214,9 @@ class RingGeneratorApp:
         )
         row += 1
 
-        ttk.Label(controls, text="自动文件名").grid(row=row, column=0, sticky="w", pady=5)
-        ttk.Label(controls, textvariable=self.filename_var, foreground="#234e70", wraplength=260).grid(
-            row=row, column=1, columnspan=2, sticky="w", pady=5
+        ttk.Label(controls, text="输出文件名").grid(row=row, column=0, sticky="w", pady=5)
+        ttk.Entry(controls, textvariable=self.filename_var, width=27).grid(
+            row=row, column=1, columnspan=2, sticky="ew", pady=5
         )
         row += 1
 
@@ -374,12 +374,29 @@ class RingGeneratorApp:
             values["plate"],
         )
 
+    def output_filename(self) -> str:
+        """Return a Windows-safe, user-entered DXF filename."""
+
+        filename = self.filename_var.get().strip()
+        if not filename:
+            raise ValueError("输出文件名不能为空")
+        if not filename.lower().endswith(".dxf"):
+            raise ValueError("输出文件名必须以 .dxf 结尾")
+        if any(character in filename for character in '<>:"/\\|?*'):
+            raise ValueError("输出文件名不能包含 Windows 不支持的字符")
+        if filename.endswith((".", " ")):
+            raise ValueError("输出文件名不能以句点或空格结尾")
+        return filename
+
     def update_preview(self) -> None:
         if not hasattr(self, "canvas") or self._updating_preview:
             return
         self._updating_preview = True
         try:
             values = self.values()
+            # Keep the editable name simple: any parameter change refreshes
+            # the suggested filename.  The user may overwrite it before
+            # clicking Generate DXF.
             self.filename_var.set(self.filename_for(values))
             wall = values["cut_outer"] - values["cut_inner"]
             material_each_side = (wall - float(values["male_lower_base"])) / 2.0
@@ -394,7 +411,6 @@ class RingGeneratorApp:
             self.status_var.set("就绪")
             self.draw_preview(values)
         except (OSError, ValueError, TypeError) as exc:
-            self.filename_var.set("请输入有效参数")
             self.geometry_var.set(str(exc))
             self.status_var.set("参数需要检查")
             self.canvas.delete("all")
@@ -500,7 +516,7 @@ class RingGeneratorApp:
             if not str(output_dir).strip():
                 raise ValueError("输出文件夹不能为空")
             output_dir.mkdir(parents=True, exist_ok=True)
-            output = output_dir / self.filename_for(values)
+            output = output_dir / self.output_filename()
             if output.exists() and not messagebox.askyesno(
                 "文件已存在", f"文件已存在：\n{output}\n\n是否覆盖？", parent=self.root
             ):

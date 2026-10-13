@@ -323,19 +323,14 @@ def default_filename(
     notch_shape: str = DEFAULT_NOTCH_SHAPE,
     plate_thickness: float = 0.0,
 ) -> str:
-    """Return the requested compact filename based on ID, OD, and plate."""
+    """Return the plastic-box default filename based on ID, OD, and count."""
 
     notch_shape = notch_shape.lower()
     if notch_shape not in NOTCH_SHAPES:
         raise ValueError("缺口形状必须是梯形或矩形")
-    # Keep the filename limited to the requested ID, OD, and total radial
-    # compensation. A 3 mm plate allowance on each side is recorded as
-    # 203x262+6补 because the two-sided diameter compensation totals 6 mm.
-    return (
-        f"{format_value(inner_diameter)}"
-        f"x{format_value(outer_diameter)}"
-        f"+{format_value(plate_thickness * 2)}补.dxf"
-    )
+    # A literal '*' is invalid in Windows filenames.  Use x between the
+    # dimensions, for example: 203x262盖4.dxf.
+    return f"{format_value(inner_diameter)}x{format_value(outer_diameter)}盖{parts}.dxf"
 
 
 def individual_filename(
