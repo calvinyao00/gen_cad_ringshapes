@@ -60,12 +60,11 @@ python3 ring_generator_gui.py
 
 本程序使用 Python 标准库，不需要安装 pip 第三方包。Windows EXE 会将 Tkinter 一起打包。
 
-GitHub Actions 会同时生成两个 Windows 压缩包：
+GitHub Actions 只生成一个 Windows 压缩包：
 
-- `环形拼接件生成器-windows`：普通 Windows 版本。
 - `环形拼接件生成器-windows7`：Python 3.8.10 32 位 Windows 7 兼容版本。
 
-两个版本均包含梯形公头/母头连接。公头下底、上底和伸出高度按 0.1 mm 调整，四个梯形转角为 R2 mm 圆角。
+该版本包含梯形公头/母头连接。公头下底、上底和伸出高度按 0.1 mm 调整，四个梯形转角为 R2 mm 圆角。
 
 ---
 

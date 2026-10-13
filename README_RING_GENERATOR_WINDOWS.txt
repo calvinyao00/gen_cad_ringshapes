@@ -10,12 +10,9 @@ Windows 使用方法：
 本程序使用 Tkinter 桌面界面，只使用 Python 标准库，不需要安装 pip 第三方包。
 关闭窗口即可退出程序，不会留下本地浏览器服务器进程。
 
-GitHub Actions 每次构建会同时生成两个版本：
+GitHub Actions 每次仅生成 `环形拼接件生成器-windows7`：Python 3.8.10 32 位 Windows 7 兼容版本。
 
-- `环形拼接件生成器-windows`：普通 Windows 版本。
-- `环形拼接件生成器-windows7`：Python 3.8.10 32 位 Windows 7 兼容版本。
-
-两个版本均使用塑料护盒的梯形公头/母头连接：公头下底宽度、上底宽度和伸出高度可按 0.1 mm 调整，四个梯形转角为精确 R2 mm 圆角。
+该版本使用塑料护盒的梯形公头/母头连接：公头下底宽度、上底宽度和伸出高度可按 0.1 mm 调整，四个梯形转角为精确 R2 mm 圆角。
 
 如果不希望在使用电脑上安装 Python，可以在一台 Windows 构建电脑上双击
 `build_windows_exe.bat`。脚本会生成：

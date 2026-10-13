@@ -10,9 +10,7 @@
 2. 打开仓库的 **Actions** 页面。
 3. 选择 **构建 Windows EXE**。
 4. 点击 **Run workflow**，或推送到 `main` / `master` 分支。
-5. 工作流完成后，在运行页面底部选择下载：
-   - `环形拼接件生成器-windows`：普通 Windows 版本。
-   - `环形拼接件生成器-windows7`：Windows 7 兼容版本。
+5. 工作流完成后，在运行页面底部下载 `环形拼接件生成器-windows7`（Windows 7 兼容版本）。
 6. 解压对应 ZIP，双击 `环形拼接件生成器.exe`。
 
 目标 Windows 电脑不需要 Python、pip 或浏览器。
